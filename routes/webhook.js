@@ -1,6 +1,7 @@
 const express = require('express');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
+const WebhookEvent = require('../models/WebhookEvent');
 
 const router = express.Router();
 
@@ -10,84 +11,49 @@ const router = express.Router();
  * Creates pending transaction and moves amount to pendingCashback
  */
 router.post('/conversion', async (req, res) => {
+  // Create event log first
+  const event = await WebhookEvent.create({
+    source: req.query.source || 'generic',
+    eventType: 'conversion',
+    headers: req.headers,
+    payload: req.body,
+    status: 'received'
+  });
+
   try {
     const { userId, orderId, amount, commission, storeId, offerId } = req.body;
-    if (!userId || !orderId) return res.status(400).json({ success:false, message:'Missing params' });
+    if (!userId || !orderId) {
+      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing params' });
+      return res.status(400).json({ success:false, message:'Missing params' });
+    }
 
     const tx = await Transaction.create({
       user: userId,
       orderId,
       amount: amount || 0,
-      commission: commission || 0,
+      commissionAmount: commission || 0,
       store: storeId || null,
-      offer: offerId || null,
+      // offerId mapping optional if your model supports
       status: 'pending'
     });
 
     await User.updateOne(
       { _id: userId },
-      { $inc: { 'wallet.pendingCashback': tx.commission } }
+      { $inc: { 'wallet.pendingCashback': commission || 0 } }
     );
+
+    await WebhookEvent.findByIdAndUpdate(event._id, {
+      status: 'processed',
+      processedAt: new Date(),
+      transaction: tx._id
+    });
 
     res.status(201).json({ success:true, data: { conversion: tx } });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success:false, message:'Server error' });
+    await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: err.message || 'Server error' });
+    res.status(500).json({ success:false, message: 'Server error' });
   }
 });
 
 module.exports = router;
-
-
-
-// const express = require('express');
-// const router = express.Router();
-// const commissionService = require('../services/commissionService');
-// const Transaction = require('../models/Transaction');
-
-// // POST /api/webhooks/cuelinks
-// router.post('/cuelinks', express.json({ type: '*/*' }), async (req, res) => {
-//   try {
-//     // TODO: verify signature if Cuelinks sends one
-//     const payload = req.body;
-//     // Map payload fields to your Transaction model
-//     // Example mapping (adjust per real payload)
-//     const orderId = payload.order_id || payload.orderId || payload.id;
-//     const status = payload.status || 'pending';
-//     const amount = parseFloat(payload.order_value || payload.amount || 0);
-//     const commissionAmount = parseFloat(payload.commission || payload.commission_amount || 0);
-
-//     if (!orderId) return res.status(400).json({ success:false, message: 'No order id' });
-
-//     // Upsert transaction
-//     let tx = await Transaction.findOne({ orderId });
-//     if (!tx) {
-//       tx = new Transaction({
-//         orderId,
-//         orderDate: payload.order_date ? new Date(payload.order_date) : new Date(),
-//         productAmount: amount,
-//         commissionAmount: commissionAmount || undefined,
-//         status,
-//         trackingData: payload
-//       });
-//       await tx.save();
-//     } else {
-//       tx.status = status;
-//       tx.productAmount = amount;
-//       tx.trackingData = payload;
-//       await tx.save();
-//     }
-
-//     // If confirmed -> process commission
-//     if (status === 'confirmed') {
-//       await commissionService.processTransaction(tx._id);
-//     }
-
-//     res.json({ success:true });
-//   } catch (err) {
-//     console.error('webhook error', err);
-//     res.status(500).json({ success:false, message: 'Server error' });
-//   }
-// });
-
-// module.exports = router;

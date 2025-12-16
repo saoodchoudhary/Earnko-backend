@@ -7,9 +7,19 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true, minlength: 6 },
   role: { type: String, enum: ['user','admin','affiliate'], default: 'user' },
 
-  // New fields for admin control
-  accountStatus: { type: String, enum: ['active','hold','blocked'], default: 'active', index: true },
-  isApproved: { type: Boolean, default: true },
+  // Optional profile fields
+  phone: { type: String, default: '' },
+
+  // Payout preferences
+  payout: {
+    upiId: { type: String, default: '' },
+    bank: {
+      holderName: { type: String, default: '' },
+      accountNumber: { type: String, default: '' },
+      ifsc: { type: String, default: '' },
+      bankName: { type: String, default: '' }
+    }
+  },
 
   affiliateInfo: {
     isAffiliate: { type: Boolean, default: false },

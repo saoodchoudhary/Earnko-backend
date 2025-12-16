@@ -37,6 +37,22 @@ app.use('/api/admin/users', require('./routes/admin/users')); // NEW
 app.use('/api/admin/payouts', require('./routes/admin/payouts'));
 app.use('/api/admin/category-commissions', require('./routes/admin/category-commissions')); // NEW
 app.use("/api/admin/stores", require("./routes/admin/stores")); // NEW
+app.use('/api/admin/clicks', require('./routes/admin/clicks'));        // NEW
+app.use('/api/admin/webhooks', require('./routes/admin/webhooks'));    // NEW
+app.use('/api/admin/settings', require('./routes/admin/settings'));    // NEW
+app.use("/api/admin/commissions", require("./routes/admin/commissions")); // NEW
+
+
+// User-scoped routes for dashboard
+app.use('/api/user/profile', require('./routes/user/profile'));
+app.use('/api/user/clicks', require('./routes/user/clicks'));
+app.use('/api/user/referrals', require('./routes/user/referrals'));
+app.use('/api/support', require('./routes/support'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/admin/support', require('./routes/admin/support'));
+
+
+
 
 
 
