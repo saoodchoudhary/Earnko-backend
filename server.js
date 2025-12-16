@@ -23,8 +23,23 @@ app.use(cookieParser());
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/affiliate', require('./routes/affiliate'));
-app.use('/api/webhooks', require('./routes/webhook'));
+app.use('/api/affiliate', require('./routes/affiliate')); // existing
+app.use('/api/webhooks', require('./routes/webhook'));    // existing
+app.use('/api/stores', require('./routes/stores'));
+app.use('/api/offers', require('./routes/offers'));
+app.use('/api/links', require('./routes/links'));
+app.use('/api/tracking', require('./routes/tracking'));
+app.use('/api/conversions', require('./routes/conversions'));
+app.use('/api/wallet', require('./routes/wallet'));
+//  Admin transactions (NEW)
+app.use('/api/admin/transactions', require('./routes/admin/transactions'));
+app.use('/api/admin/users', require('./routes/admin/users')); // NEW
+app.use('/api/admin/payouts', require('./routes/admin/payouts'));
+app.use('/api/admin/category-commissions', require('./routes/admin/category-commissions')); // NEW
+app.use("/api/admin/stores", require("./routes/admin/stores")); // NEW
+
+
+
 
 // Health
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

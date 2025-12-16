@@ -17,4 +17,14 @@ async function auth(req, res, next) {
   }
 }
 
-module.exports = { auth };
+// Admin-only guard
+function adminAuth(req, res, next) {
+  return auth(req, res, () => {
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ success:false, message:'Forbidden' });
+    }
+    next();
+  });
+}
+
+module.exports = { auth, adminAuth };

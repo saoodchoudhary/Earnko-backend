@@ -6,6 +6,11 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true, minlength: 6 },
   role: { type: String, enum: ['user','admin','affiliate'], default: 'user' },
+
+  // New fields for admin control
+  accountStatus: { type: String, enum: ['active','hold','blocked'], default: 'active', index: true },
+  isApproved: { type: Boolean, default: true },
+
   affiliateInfo: {
     isAffiliate: { type: Boolean, default: false },
     affiliateSince: Date,
