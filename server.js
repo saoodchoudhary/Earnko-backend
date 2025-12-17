@@ -5,6 +5,10 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
+const { Server } = require('socket.io');
+const { setIO } = require('./socket/io');
+const { initSupportSockets } = require('./socket/support');
+
 const config = {
   port: process.env.PORT || 8080,
   mongoUri: process.env.MONGODB_URI
@@ -13,6 +17,7 @@ const config = {
 const app = express();
 const server = http.createServer(app);
 
+// CORS (match frontend)
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
@@ -41,6 +46,7 @@ app.use('/api/admin/clicks', require('./routes/admin/clicks'));        // NEW
 app.use('/api/admin/webhooks', require('./routes/admin/webhooks'));    // NEW
 app.use('/api/admin/settings', require('./routes/admin/settings'));    // NEW
 app.use("/api/admin/commissions", require("./routes/admin/commissions")); // NEW
+app.use('/api/admin/support', require('./routes/admin/support'));
 
 
 // User-scoped routes for dashboard
@@ -49,25 +55,25 @@ app.use('/api/user/clicks', require('./routes/user/clicks'));
 app.use('/api/user/referrals', require('./routes/user/referrals'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/notifications', require('./routes/notifications'));
-app.use('/api/admin/support', require('./routes/admin/support'));
-
-
-
-
-
 
 
 // Health
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Socket.io setup
+const io = new Server(server, {
+  cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000', credentials: true },
+  transports: ['websocket', 'polling']
+});
+setIO(io);
+initSupportSockets(io);
 
 // Start
 async function start() {
   try {
     await mongoose.connect(config.mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
     console.log('MongoDB connected');
-    server.listen(config.port, () => {
-      console.log(`Server started on port ${config.port}`);
-    });
+    server.listen(config.port, () => console.log(`Server started on port ${config.port}`));
   } catch (err) {
     console.error('Failed to start', err);
     process.exit(1);

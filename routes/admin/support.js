@@ -4,6 +4,7 @@ let adminAuth, auth
 try { ({ adminAuth, auth } = require('../../middleware/auth')) } catch {}
 const SupportTicket = require('../../models/SupportTicket');
 const User = require('../../models/User');
+const { getIO } = require('../../socket/io');
 
 const ensureAdmin = (req, res, next) => {
   if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' })
@@ -14,10 +15,6 @@ const adminMiddleware = adminAuth ? [adminAuth] : (auth ? [auth, ensureAdmin] : 
 
 const router = express.Router();
 
-/**
- * GET /api/admin/support/tickets
- * Query: page, limit, status, q
- */
 router.get('/tickets', ...adminMiddleware, async (req, res) => {
   try {
     const { page = 1, limit = 20, status = '', q = '' } = req.query
@@ -41,14 +38,10 @@ router.get('/tickets', ...adminMiddleware, async (req, res) => {
 
     res.json({ success: true, data: { items, total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum } })
   } catch (err) {
-    console.error('admin tickets list error', err)
     res.status(500).json({ success: false, message: 'Internal server error' })
   }
 })
 
-/**
- * GET /api/admin/support/tickets/:id
- */
 router.get('/tickets/:id', ...adminMiddleware, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' })
@@ -56,15 +49,10 @@ router.get('/tickets/:id', ...adminMiddleware, async (req, res) => {
     if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
     res.json({ success: true, data: { ticket } })
   } catch (err) {
-    console.error('admin ticket get error', err)
     res.status(500).json({ success: false, message: 'Internal server error' })
   }
 })
 
-/**
- * POST /api/admin/support/tickets/:id/reply
- * body: { message }
- */
 router.post('/tickets/:id/reply', ...adminMiddleware, async (req, res) => {
   try {
     const { message } = req.body || {}
@@ -74,33 +62,33 @@ router.post('/tickets/:id/reply', ...adminMiddleware, async (req, res) => {
     const ticket = await SupportTicket.findById(req.params.id)
     if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
 
-    ticket.replies.push({ by: 'admin', message, createdAt: new Date() })
+    const reply = { by: 'admin', message, createdAt: new Date() }
+    ticket.replies.push(reply)
     ticket.updatedAt = new Date()
     await ticket.save()
 
+    try { getIO().to(`ticket:${ticket._id}`).emit('support:message', { ticketId: ticket._id.toString(), reply }); } catch {}
+
     res.status(201).json({ success: true, data: { ticket } })
   } catch (err) {
-    console.error('admin ticket reply error', err)
     res.status(500).json({ success: false, message: 'Internal server error' })
   }
 })
 
-/**
- * PATCH /api/admin/support/tickets/:id/status
- * body: { status: 'open'|'in_progress'|'resolved'|'closed' }
- */
 router.patch('/tickets/:id/status', ...adminMiddleware, async (req, res) => {
   try {
     const { status } = req.body || {}
-    const allowed = ['open', 'in_progress', 'resolved', 'closed']
+    const allowed = ['open','in_progress','resolved','closed']
     if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' })
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' })
 
     const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, { status, updatedAt: new Date() }, { new: true })
     if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
+
+    try { getIO().to(`ticket:${ticket._id}`).emit('support:status', { ticketId: ticket._id.toString(), status, updatedAt: ticket.updatedAt }); } catch {}
+
     res.json({ success: true, data: { ticket } })
   } catch (err) {
-    console.error('admin ticket status error', err)
     res.status(500).json({ success: false, message: 'Internal server error' })
   }
 })
