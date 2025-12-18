@@ -7,10 +7,8 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true, minlength: 6 },
   role: { type: String, enum: ['user','admin','affiliate'], default: 'user' },
 
-  // Optional profile fields
   phone: { type: String, default: '' },
 
-  // Payout preferences
   payout: {
     upiId: { type: String, default: '' },
     bank: {
@@ -20,6 +18,9 @@ const userSchema = new mongoose.Schema({
       bankName: { type: String, default: '' }
     }
   },
+
+  // Referral tracking (optional)
+  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
 
   affiliateInfo: {
     isAffiliate: { type: Boolean, default: false },
@@ -36,12 +37,14 @@ const userSchema = new mongoose.Schema({
     pendingCommissions: { type: Number, default: 0 },
     paidCommissions: { type: Number, default: 0 }
   },
+
   wallet: {
     totalEarnings: { type: Number, default: 0 },
     pendingCashback: { type: Number, default: 0 },
     confirmedCashback: { type: Number, default: 0 },
     availableBalance: { type: Number, default: 0 },
-    totalWithdrawn: { type: Number, default: 0 }
+    totalWithdrawn: { type: Number, default: 0 },
+    referralEarnings: { type: Number, default: 0 } // NEW (optional)
   }
 }, { timestamps: true });
 
