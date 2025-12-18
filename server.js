@@ -48,6 +48,16 @@ app.use('/api/admin/settings', require('./routes/admin/settings'));    // NEW
 app.use("/api/admin/commissions", require("./routes/admin/commissions")); // NEW
 app.use('/api/admin/support', require('./routes/admin/support'));
 
+// NEW: Public offers from CategoryCommission
+app.use('/api/public/offers', require('./routes/public/offers'));
+// NEW: products (public + admin)
+app.use('/api/products', require('./routes/products'));
+app.use('/api/admin/products', require('./routes/admin/products'));
+
+// NEW: User analytics
+app.use('/api/user/analytics', require('./routes/user/analytics'));
+
+
 
 // User-scoped routes for dashboard
 app.use('/api/user/profile', require('./routes/user/profile'));

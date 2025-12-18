@@ -5,47 +5,73 @@ const User = require('../models/User');
 
 const router = express.Router();
 
-// Wallet summary
+// Wallet summary (now includes requestedAmount = sum of pending/approved)
 router.get('/me', auth, async (req, res) => {
   try {
-    const payouts = await AffiliatePayout.find({ user: req.user._id }).sort({ createdAt: -1 });
-    res.json({ success:true, data: { wallet: req.user.wallet, payouts } });
+    const payouts = await AffiliatePayout.find({ affiliate: req.user._id }).sort({ createdAt: -1 }).lean();
+    const requestedAmount = payouts
+      .filter(p => p.status === 'pending' || p.status === 'approved')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        wallet: req.user.wallet,
+        payouts,
+        requestedAmount
+      }
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success:false, message:'Server error' });
+    console.error('Wallet summary error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Request withdrawal
+// Request withdrawal (bank/upi) — consistent with AffiliatePayout schema
 router.post('/withdraw', auth, async (req, res) => {
   try {
-    const { amount, method = 'upi', upiId, bank } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ success:false, message:'Invalid amount' });
+    const { amount, method = 'bank', upiId, bank } = req.body;
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return res.status(400).json({ success: false, message: 'Invalid amount' });
 
-    // Check balance
-    if (req.user.wallet.availableBalance < amount) {
-      return res.status(400).json({ success:false, message:'Insufficient balance' });
+    const minAmount = Number(process.env.MIN_PAYOUT_AMOUNT || 1);
+    if (amt < minAmount) return res.status(400).json({ success: false, message: `Minimum withdrawal is ₹${minAmount}` });
+
+    const available = req.user.wallet?.availableBalance || 0;
+    if (available < amt) return res.status(400).json({ success: false, message: 'Insufficient balance' });
+
+    let methodDetails = null;
+    if (method === 'upi') {
+      if (!upiId) return res.status(400).json({ success: false, message: 'UPI ID required' });
+      methodDetails = { upiId };
+    } else if (method === 'bank') {
+      const b = bank || {};
+      if (!b.holderName || !b.accountNumber || !b.ifsc || !b.bankName) {
+        return res.status(400).json({ success: false, message: 'Complete bank details required' });
+      }
+      methodDetails = { bank: b };
+    } else {
+      methodDetails = req.body.methodDetails || null;
     }
 
     const payout = await AffiliatePayout.create({
-      user: req.user._id,
-      amount,
+      affiliate: req.user._id,  // FIX: field name
+      amount: amt,
       method,
-      upiId: upiId || null,
-      bank: bank || null,
-      status: 'requested'
+      methodDetails,
+      status: 'pending'          // FIX: valid enum
     });
 
-    // Lock balance
+    // Lock funds
     await User.updateOne(
       { _id: req.user._id },
-      { $inc: { 'wallet.availableBalance': -amount, 'wallet.totalWithdrawn': 0 } }
+      { $inc: { 'wallet.availableBalance': -amt } }
     );
 
-    res.status(201).json({ success:true, data: { payout } });
+    res.status(201).json({ success: true, data: { payout } });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success:false, message:'Server error' });
+    console.error('Withdraw request error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 

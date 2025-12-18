@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Store = require('../models/Store');
 const CategoryCommission = require('../models/CategoryCommission');
 const Click = require('../models/Click');
+const Product = require('../models/Product');
 
 async function getCommissionRule(storeId, categoryKey) {
   if (storeId && categoryKey) {
@@ -33,19 +34,38 @@ async function processTransaction(transactionId) {
   const tx = await require('../models/Transaction').findById(transactionId);
   if (!tx) throw new Error('Transaction not found');
 
-  // skip if commission exists
   const existing = await Commission.findOne({ transaction: tx._id });
   if (existing) return existing;
 
+  // If productId is present in trackingData, load product (and prefer its store)
+  let product = null;
+  const tracking = tx.trackingData || {};
+  if (tracking.productId) {
+    try { product = await Product.findById(tracking.productId).lean(); } catch {}
+    if (!tx.store && product?.store) tx.store = product.store;
+  }
+
   const store = tx.store ? await Store.findById(tx.store).lean() : null;
+
+  // Fallbacks from store
   const fallbackRate = store?.commissionRate || 0;
   const fallbackType = store?.commissionType || 'percentage';
   const fallbackMax = store?.maxCommission || null;
 
-  const categoryKey = tx.trackingData?.categoryKey || tx.trackingData?.category || tx.productCategory || null;
-  const rule = await getCommissionRule(tx.store, categoryKey);
-  const amount = computeCommission(tx.productAmount || 0, rule, fallbackRate, fallbackType, fallbackMax);
+  // Decide rule priority: product override > category rule > store fallback
+  let rule = null;
+  if (product?.commissionOverride?.rate != null && product?.commissionOverride?.type) {
+    rule = {
+      commissionRate: product.commissionOverride.rate,
+      commissionType: product.commissionOverride.type,
+      maxCap: product.commissionOverride.maxCap ?? null
+    };
+  } else {
+    const categoryKey = tracking.categoryKey || tx.productCategory || product?.categoryKey || null;
+    rule = await getCommissionRule(tx.store, categoryKey);
+  }
 
+  const amount = computeCommission(tx.productAmount || tx.amount || 0, rule, fallbackRate, fallbackType, fallbackMax);
   tx.commissionAmount = amount;
   await tx.save();
 
@@ -65,7 +85,10 @@ async function processTransaction(transactionId) {
     rate: rule?.commissionRate || fallbackRate,
     type: rule?.commissionType || fallbackType,
     status: 'pending',
-    metadata: { appliedRule: rule ? { id: rule._id, categoryKey: rule.categoryKey } : null }
+    metadata: {
+      productId: product?._id || null,
+      appliedRule: rule ? { commissionType: rule.commissionType, commissionRate: rule.commissionRate, maxCap: rule.maxCap ?? null } : null
+    }
   });
 
   await User.findByIdAndUpdate(affiliateId, {
