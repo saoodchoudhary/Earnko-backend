@@ -1,9 +1,9 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const Transaction = require('../models/Transaction');
-const User = require('../models/User');
-const Click = require('../models/Click');
-const WebhookEvent = require('../models/WebhookEvent');
+const Transaction = require('../../models/Transaction');
+const User = require('../../models/User');
+const Click = require('../../models/Click');
+const WebhookEvent = require('../../models/WebhookEvent');
 
 const router = express.Router();
 

@@ -57,6 +57,12 @@ app.use('/api/admin/products', require('./routes/admin/products'));
 // NEW: User analytics
 app.use('/api/user/analytics', require('./routes/user/analytics'));
 
+// NEW: Cuelinks integration
+app.use('/api/affiliate/cuelinks', require('./routes/affiliate/cuelinks'));
+app.use('/api/webhooks/cuelinks', require('./routes/webhooks/cuelinks'));
+
+
+app.use('/api/admin/cuelinks', require('./routes/admin/cuelinks'));
 
 
 // User-scoped routes for dashboard
