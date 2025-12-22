@@ -4,23 +4,17 @@ const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
 const WebhookEvent = require('../../models/WebhookEvent');
+const { creditOnApprovedTransaction, reverseOnRejection } = require('../../services/referralService');
 
 const router = express.Router();
 
 /**
  * Cuelinks Postback/Webhook
- * Configure in Cuelinks your postback URL to this endpoint.
- * We support both query and JSON body params:
- * Expecting typical keys:
- * - subid (our clickId), order_id (or orderid), sale_amount (or amount), commission (or payout), status, merchant (optional)
- *
- * Example mapping:
- * status: 'pending' | 'confirmed' | 'cancelled' (map to pending/approved/rejected)
+ * Keys: subid, order_id, sale_amount, commission, status
  */
 router.all('/', async (req, res) => {
   const payload = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
 
-  // Save event first
   const event = await WebhookEvent.create({
     source: 'cuelinks',
     eventType: 'conversion',
@@ -45,16 +39,24 @@ router.all('/', async (req, res) => {
     let status = 'pending';
     if (['confirmed', 'approved', 'valid', 'paid'].includes(statusRaw)) status = 'approved';
     else if (['cancelled', 'rejected', 'invalid', 'void'].includes(statusRaw)) status = 'rejected';
-    else status = 'pending';
 
-    // Find click by clickId (subid) → user + store
+    // Find click by clickId (subid) => user + store
     const click = await Click.findOne({ clickId: subid }).lean();
-    const userId = click?.user;
+    let userId = click?.user || null;
     const storeId = click?.store || null;
 
-    // Upsert transaction by orderId (per network)
+    // Fallback: parse subid pattern u<userId>-<random>
+    if (!userId && typeof subid === 'string') {
+      const m = /^u([a-f0-9]{24})-/i.exec(subid);
+      if (m && mongoose.Types.ObjectId.isValid(m[1])) {
+        userId = new mongoose.Types.ObjectId(m[1]);
+      }
+    }
+
+    // Upsert transaction by orderId
     let tx = await Transaction.findOne({ orderId });
     const isNew = !tx;
+    let prevStatus = null;
 
     if (!tx) {
       tx = await Transaction.create({
@@ -62,13 +64,13 @@ router.all('/', async (req, res) => {
         orderId,
         amount: saleAmount,
         commissionAmount: commission,
-        store: storeId,
+        store: storeId || null,
         status,
         clickId: subid,
         trackingData: { network: 'cuelinks' }
       });
     } else {
-      const prevStatus = tx.status;
+      prevStatus = tx.status;
       tx.amount = saleAmount || tx.amount || 0;
       tx.commissionAmount = commission || tx.commissionAmount || 0;
       tx.status = status;
@@ -79,7 +81,6 @@ router.all('/', async (req, res) => {
       // Wallet diffs if user present and status changed
       if (userId && prevStatus !== status) {
         if (prevStatus !== 'approved' && status === 'approved') {
-          // Move from pending → available
           await User.updateOne(
             { _id: userId },
             {
@@ -91,13 +92,10 @@ router.all('/', async (req, res) => {
             }
           );
         } else if (prevStatus !== 'rejected' && status === 'rejected') {
-          // Remove from pending
           await User.updateOne(
             { _id: userId },
             { $inc: { 'wallet.pendingCashback': -Math.abs(tx.commissionAmount || 0) } }
           );
-        } else if (isNew && status === 'pending') {
-          // handled below for new, added here for completeness
         }
       }
     }
@@ -120,6 +118,13 @@ router.all('/', async (req, res) => {
           }
         );
       }
+    }
+
+    // Referral: credit on approved; reverse if previously approved -> now rejected
+    if (status === 'approved') {
+      try { await creditOnApprovedTransaction(tx._id); } catch (e) { console.warn('referral credit error', e?.message); }
+    } else if (prevStatus === 'approved' && status === 'rejected') {
+      try { await reverseOnRejection(tx._id); } catch (e) { console.warn('referral reverse error', e?.message); }
     }
 
     await WebhookEvent.findByIdAndUpdate(event._id, {

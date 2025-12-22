@@ -1,19 +1,22 @@
 const express = require('express');
 const { auth } = require('../middleware/auth');
+const { requireRole } = require('../middleware/roles');
 const User = require('../models/User');
 const Commission = require('../models/Commission');
 const Store = require('../models/Store');
 const Product = require('../models/Product');
+const Click = require('../models/Click');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const { buildDeeplink, getCampaigns } = require('../services/cuelinks');
 
 const router = express.Router();
 
 /**
- * Generate a trackable link for an offer (existing)
- * Expects: offerId
+ * Generate a trackable link for an offer
+ * Restrict to affiliates (optional)
  */
-router.post('/generate', auth, async (req, res) => {
+router.post('/generate', auth, requireRole('affiliate'), async (req, res) => {
   try {
     const { offerId } = req.body;
     const offer = await Commission.findById(offerId).populate('store');
@@ -45,10 +48,10 @@ router.post('/generate', auth, async (req, res) => {
 });
 
 /**
- * Generate a trackable link for a product (existing from earlier work)
- * Expects: productId
+ * Generate a trackable link for a product
+ * Restrict to affiliates (optional)
  */
-router.post('/generate-product', auth, async (req, res) => {
+router.post('/generate-product', auth, requireRole('affiliate'), async (req, res) => {
   try {
     const { productId } = req.body;
     const product = await Product.findById(productId).populate('store');
@@ -81,18 +84,14 @@ router.post('/generate-product', auth, async (req, res) => {
 
 /**
  * Generate a Cuelinks deeplink for a product
- * Expects: productId, optional channel_id
- * Returns: short (or affiliate) URL from Cuelinks.
- * - Uses subid 'u<userId>-<random>' so conversions attribute to the user.
- * - If campaign needs approval, returns 409 with suggestions for that host.
+ * Restrict to affiliates (optional)
  */
-router.post('/generate-cuelinks-product', auth, async (req, res) => {
+router.post('/generate-cuelinks-product', auth, requireRole('affiliate'), async (req, res) => {
   try {
     const { productId, channel_id, subid2, subid3, subid4, subid5 } = req.body || {};
     const product = await Product.findById(productId).populate('store');
     if (!product || !product.isActive) return res.status(404).json({ success:false, message:'Product not found' });
 
-    // Build subid: u<userId>-<random>
     const rand = crypto.randomBytes(4).toString('hex');
     const subid = `u${req.user._id.toString()}-${rand}`;
 
@@ -107,7 +106,6 @@ router.post('/generate-cuelinks-product', auth, async (req, res) => {
     } catch (err) {
       const msg = String(err.message || '').toLowerCase();
       if (msg.includes('campaign needs approval')) {
-        // Suggest campaigns matching the product host
         let host = '';
         try { host = new URL(product.deeplink).hostname.replace(/^www\./, ''); } catch {}
         let suggestions = [];
@@ -127,7 +125,6 @@ router.post('/generate-cuelinks-product', auth, async (req, res) => {
       throw err;
     }
 
-    // Optionally store a record in uniqueLinks for analytics
     await User.updateOne(
       { _id: req.user._id },
       { $push: { 'affiliateInfo.uniqueLinks': {
@@ -144,6 +141,62 @@ router.post('/generate-cuelinks-product', auth, async (req, res) => {
   } catch (err) {
     console.error('generate-cuelinks-product error', err);
     return res.status(500).json({ success:false, message: err.message || 'Server error' });
+  }
+});
+
+/**
+ * Cuelinks share wrapper: /api/links/open-cuelinks/:subid
+ * Records a Click (clickId = subid) attributed to the user derived from subid (u<userId>-<rand>),
+ * increments user's uniqueLinks clicks count, and redirects to the stored Cuelinks URL.
+ */
+router.get('/open-cuelinks/:subid', async (req, res) => {
+  try {
+    const subid = req.params.subid;
+    if (!subid) return res.redirect(process.env.FRONTEND_URL || 'http://localhost:3000');
+
+    // Parse userId from subid pattern u<userId>-<rand>
+    let userId = null;
+    const m = /^u([a-f0-9]{24})-/i.exec(subid);
+    if (m && mongoose.Types.ObjectId.isValid(m[1])) {
+      userId = new mongoose.Types.ObjectId(m[1]);
+    }
+
+    // Find the user and the unique link entry corresponding to this subid
+    let destination = null;
+    if (userId) {
+      const user = await User.findById(userId).lean();
+      if (user && Array.isArray(user.affiliateInfo?.uniqueLinks)) {
+        const entry = user.affiliateInfo.uniqueLinks.find(l => l?.metadata?.cuelinks?.subid === subid);
+        destination = entry?.metadata?.cuelinks?.url || null;
+
+        // Increment clicks count for the entry
+        if (entry) {
+          await User.updateOne(
+            { _id: userId, 'affiliateInfo.uniqueLinks.metadata.cuelinks.subid': subid },
+            { $inc: { 'affiliateInfo.uniqueLinks.$.clicks': 1 } }
+          );
+        }
+
+        // Record a Click (generic)
+        await Click.create({
+          clickId: subid,
+          user: userId,
+          store: entry?.store || null,
+          product: entry?.metadata?.productId || null,
+          slug: entry?.customSlug || null,
+          userAgent: req.get('user-agent'),
+          ip: req.ip,
+          referer: req.get('referer') || null
+        });
+      }
+    }
+
+    // Fallback: if destination unknown, go to frontend
+    const target = destination || (process.env.FRONTEND_URL || 'http://localhost:3000');
+    return res.redirect(target);
+  } catch (err) {
+    console.warn('open-cuelinks error', err);
+    return res.redirect(process.env.FRONTEND_URL || 'http://localhost:3000');
   }
 });
 

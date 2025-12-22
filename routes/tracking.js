@@ -1,138 +1,70 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const Transaction = require('../models/Transaction');
+const crypto = require('crypto');
 const User = require('../models/User');
 const Click = require('../models/Click');
-const WebhookEvent = require('../models/WebhookEvent');
+const Store = require('../models/Store');
+const Product = require('../models/Product');
+const { buildDeeplink } = require('../services/cuelinks');
 
 const router = express.Router();
 
 /**
- * Cuelinks Postback/Webhook
- * Configure in Cuelinks your postback URL to this endpoint.
- * We support both query and JSON body params:
- * Expecting typical keys:
- * - subid (our clickId), order_id (or orderid), sale_amount (or amount), commission (or payout), status, merchant (optional)
- *
- * Example mapping:
- * status: 'pending' | 'confirmed' | 'cancelled' (map to pending/approved/rejected)
+ * Redirect handler: /api/tracking/redirect/:slug
+ * - Finds user unique link by slug
+ * - Records a click with a required clickId
+ * - Builds a Cuelinks deeplink with subid=clickId and redirects
+ * - Falls back to product/store URL if Cuelinks returns error
  */
-router.all('/', async (req, res) => {
-  const payload = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
-
-  // Save event first
-  const event = await WebhookEvent.create({
-    source: 'cuelinks',
-    eventType: 'conversion',
-    headers: req.headers,
-    payload,
-    status: 'received'
-  });
-
+router.get('/redirect/:slug', async (req, res) => {
   try {
-    const subid = payload.subid || payload.sub_id || payload.sid || null;
-    const orderId = payload.order_id || payload.orderid || payload.oid || null;
-    const saleAmount = Number(payload.sale_amount ?? payload.amount ?? payload.order_amount ?? 0) || 0;
-    const commission = Number(payload.commission ?? payload.payout ?? payload.earnings ?? 0) || 0;
-    const statusRaw = String(payload.status || '').toLowerCase();
+    const slug = req.params.slug;
+    const user = await User.findOne({ 'affiliateInfo.uniqueLinks.customSlug': slug }).lean();
+    if (!user) return res.status(404).json({ success:false, message:'Link not found' });
 
-    if (!subid || !orderId) {
-      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing subid or order_id' });
-      return res.status(400).json({ success: false, message: 'Missing subid or order_id' });
-    }
+    const link = user.affiliateInfo.uniqueLinks.find(l => l.customSlug === slug);
+    const store = await Store.findById(link.store);
+    const productId = link.metadata?.productId;
 
-    // Map status
-    let status = 'pending';
-    if (['confirmed', 'approved', 'valid', 'paid'].includes(statusRaw)) status = 'approved';
-    else if (['cancelled', 'rejected', 'invalid', 'void'].includes(statusRaw)) status = 'rejected';
-    else status = 'pending';
+    const product = productId ? await Product.findById(productId).lean() : null;
 
-    // Find click by clickId (subid) → user + store
-    const click = await Click.findOne({ clickId: subid }).lean();
-    const userId = click?.user;
-    const storeId = click?.store || null;
+    // required clickId
+    const clickId = crypto.randomBytes(8).toString('hex');
 
-    // Upsert transaction by orderId (per network)
-    let tx = await Transaction.findOne({ orderId });
-    const isNew = !tx;
-
-    if (!tx) {
-      tx = await Transaction.create({
-        user: userId || null,
-        orderId,
-        amount: saleAmount,
-        commissionAmount: commission,
-        store: storeId,
-        status,
-        clickId: subid,
-        trackingData: { network: 'cuelinks' }
-      });
-    } else {
-      const prevStatus = tx.status;
-      tx.amount = saleAmount || tx.amount || 0;
-      tx.commissionAmount = commission || tx.commissionAmount || 0;
-      tx.status = status;
-      if (!tx.store && storeId) tx.store = storeId;
-      if (!tx.clickId) tx.clickId = subid;
-      await tx.save();
-
-      // Wallet diffs if user present and status changed
-      if (userId && prevStatus !== status) {
-        if (prevStatus !== 'approved' && status === 'approved') {
-          // Move from pending → available
-          await User.updateOne(
-            { _id: userId },
-            {
-              $inc: {
-                'wallet.pendingCashback': -Math.abs(tx.commissionAmount || 0),
-                'wallet.confirmedCashback': Math.abs(tx.commissionAmount || 0),
-                'wallet.availableBalance': Math.abs(tx.commissionAmount || 0)
-              }
-            }
-          );
-        } else if (prevStatus !== 'rejected' && status === 'rejected') {
-          // Remove from pending
-          await User.updateOne(
-            { _id: userId },
-            { $inc: { 'wallet.pendingCashback': -Math.abs(tx.commissionAmount || 0) } }
-          );
-        } else if (isNew && status === 'pending') {
-          // handled below for new, added here for completeness
-        }
-      }
-    }
-
-    // Wallet adjust for new tx
-    if (isNew && userId) {
-      if (status === 'pending') {
-        await User.updateOne(
-          { _id: userId },
-          { $inc: { 'wallet.pendingCashback': Math.abs(commission) } }
-        );
-      } else if (status === 'approved') {
-        await User.updateOne(
-          { _id: userId },
-          {
-            $inc: {
-              'wallet.confirmedCashback': Math.abs(commission),
-              'wallet.availableBalance': Math.abs(commission)
-            }
-          }
-        );
-      }
-    }
-
-    await WebhookEvent.findByIdAndUpdate(event._id, {
-      status: 'processed',
-      processedAt: new Date(),
-      transaction: tx._id
+    await Click.create({
+      clickId,
+      user: user._id,
+      store: store?._id || null,
+      product: product?._id || null,
+      slug,
+      userAgent: req.get('user-agent'),
+      ip: req.ip,
+      referer: req.get('referer') || null
     });
 
-    return res.json({ success: true, data: { transaction: tx } });
+    // increment user link clicks
+    await User.updateOne(
+      { _id: user._id, 'affiliateInfo.uniqueLinks.customSlug': slug },
+      { $inc: { 'affiliateInfo.uniqueLinks.$.clicks': 1 } }
+    );
+
+    // set cookie for debugging/local attribution
+    res.cookie('ek_click', clickId, { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: false, sameSite: 'lax' });
+
+    // destination fallback
+    const destination = (product && product.deeplink) || store?.baseUrl || (process.env.FRONTEND_URL || 'http://localhost:3000');
+
+    // try Cuelinks deeplink with subid = clickId
+    let affiliateUrl = destination;
+    try {
+      affiliateUrl = await buildDeeplink({ url: destination, subid: clickId });
+    } catch (e) {
+      console.warn('Cuelinks deeplink failed, fallback to destination:', e.message);
+    }
+
+    return res.redirect(affiliateUrl);
   } catch (err) {
-    console.error('Cuelinks webhook error:', err);
-    await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: err.message || 'Server error' });
-    return res.status(500).json({ success: false, message: 'Server error' });
+    console.warn('tracking redirect error', err);
+    res.status(500).json({ success:false, message:'Server error' });
   }
 });
 
