@@ -74,6 +74,7 @@ app.use('/api/admin/category-commissions', require('./routes/admin/category-comm
 app.use('/api/user/analytics', require('./routes/user/analytics'));
 
 // Health
+app.get('/', (req, res) => res.json({ status: 'ok' }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Socket.io
