@@ -20,6 +20,8 @@
     "jsonwebtoken": "^9.0.0",
     "mongoose": "^7.3.4",
     "node-fetch": "^3.3.2",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
     "shortid": "^2.2.16",
     "socket.io": "^4.7.2",
     "undici": "^7.16.0"
