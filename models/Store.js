@@ -8,8 +8,11 @@ const storeSchema = new mongoose.Schema({
   maxCommission: { type: Number, default: null },
   trackingUrl: String,
   baseUrl: String,
+  // New: optional logo path (served via /uploads)
+  logo: { type: String, default: null },
   isActive: { type: Boolean, default: true },
   cookieDuration: { type: Number, default: 30 }, // days
+  description: { type: String, default: '' },
   stats: {
     totalClicks: { type: Number, default: 0 },
     totalConversions: { type: Number, default: 0 },

@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const passport = require('passport'); // NEW
 require('dotenv').config();
 
+const path = require('path');
 const { Server } = require('socket.io');
 const { setIO } = require('./socket/io');
 const { initSupportSockets } = require('./socket/support');
@@ -26,7 +27,12 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use(passport.initialize()); // NEW
+app.use(passport.initialize());
+
+// Serve uploaded files (store logos, etc.)
+const uploadsDir = path.join(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsDir));
+
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));           // existing email/password

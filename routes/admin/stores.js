@@ -1,5 +1,8 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const { adminAuth } = require('../../middleware/auth');
 const Store = require('../../models/Store');
 const Transaction = require('../../models/Transaction');
@@ -7,34 +10,28 @@ const Click = require('../../models/Click');
 
 const router = express.Router();
 
-/**
- * Utility: parse date range from query.
- * Supports: range=7d|30d|90d or explicit from, to ISO dates.
- */
-function buildDateMatch(query) {
-  const now = new Date();
-  let from, to;
-
-  if (query.range) {
-    const str = String(query.range);
-    if (/^\d+d$/.test(str)) {
-      const n = parseInt(str, 10);
-      from = new Date(now);
-      from.setDate(from.getDate() - n);
-      to = now;
-    }
-  }
-  if (query.from) from = new Date(query.from);
-  if (query.to) to = new Date(query.to);
-
-  const m = {};
-  if (from || to) {
-    m.createdAt = {};
-    if (from) m.createdAt.$gte = from;
-    if (to) m.createdAt.$lte = to;
-  }
-  return m;
+// Multer setup for logo uploads
+const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadsRoot)) {
+  fs.mkdirSync(uploadsRoot, { recursive: true });
 }
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsRoot),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const base = path.basename(file.originalname || 'logo', ext).replace(/\s+/g, '-').slice(0, 40);
+    const stamp = Date.now();
+    cb(null, `${base}-${stamp}${ext || '.png'}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // ~2MB
+  fileFilter: (_req, file, cb) => {
+    if (!/^image\//.test(file.mimetype)) return cb(new Error('Only image files allowed'));
+    cb(null, true);
+  }
+});
 
 /**
  * GET /api/admin/stores
@@ -121,6 +118,29 @@ router.delete('/:id', adminAuth, async (req, res) => {
   } catch (err) {
     console.error('Admin delete store error:', err);
     res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/admin/stores/:id/logo
+ * Upload a logo image and set it on the store (returns updated item)
+ */
+router.post('/:id/logo', adminAuth, upload.single('logo'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+    // Public URL served from /uploads
+    const publicPath = `/uploads/${req.file.filename}`;
+
+    const item = await Store.findByIdAndUpdate(id, { logo: publicPath }, { new: true }).lean();
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+
+    res.json({ success: true, data: { item } });
+  } catch (err) {
+    console.error('Admin store logo upload error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Internal server error' });
   }
 });
 
@@ -232,18 +252,32 @@ router.get('/:id/trend', adminAuth, async (req, res) => {
 /**
  * GET /api/admin/stores/:id/recent
  * Query: limit (default 10)
+ * Returns recent transactions and recent clicks for the store
  */
 router.get('/:id/recent', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { limit = 10 } = req.query;
-    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid id' });
+    }
+
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
     const storeId = new mongoose.Types.ObjectId(id);
 
     const [recentTransactions, recentClicks] = await Promise.all([
-      Transaction.find({ store: storeId }).populate('user', 'email name').sort('-createdAt').limit(limitNum).lean(),
-      Click.find({ store: storeId }).sort('-createdAt').limit(limitNum).lean(),
+      Transaction
+        .find({ store: storeId })
+        .populate('user', 'email name')
+        .sort('-createdAt')
+        .limit(limitNum)
+        .lean(),
+      Click
+        .find({ store: storeId })
+        .sort('-createdAt')
+        .limit(limitNum)
+        .lean(),
     ]);
 
     res.json({ success: true, data: { recentTransactions, recentClicks } });
@@ -252,5 +286,34 @@ router.get('/:id/recent', adminAuth, async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
+
+/**
+ * Utility: parse date range from query
+ * Supports: range=7d|30d|90d or explicit from, to ISO dates.
+ */
+function buildDateMatch(query) {
+  const now = new Date();
+  let from, to;
+
+  if (query.range) {
+    const str = String(query.range);
+    if (/^\d+d$/.test(str)) {
+      const n = parseInt(str, 10);
+      from = new Date(now);
+      from.setDate(from.getDate() - n);
+      to = now;
+    }
+  }
+  if (query.from) from = new Date(query.from);
+  if (query.to) to = new Date(query.to);
+
+  const m = {};
+  if (from || to) {
+    m.createdAt = {};
+    if (from) m.createdAt.$gte = from;
+    if (to) m.createdAt.$lte = to;
+  }
+  return m;
+}
 
 module.exports = router;
