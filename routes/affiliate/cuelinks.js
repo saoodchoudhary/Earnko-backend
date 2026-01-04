@@ -85,4 +85,53 @@ router.post('/deeplink', auth, limiter, async (req, res) => {
   }
 });
 
+
+// Returns: { results: [{ inputUrl, success, link, shareUrl, subid, message }] }
+router.post('/bulk-deeplink', auth, limiter, async (req, res) => {
+  try {
+    const { urls } = req.body || {};
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return res.status(400).json({ success: false, message: 'urls array required' });
+    }
+    const MAX = 25;
+    const slice = urls
+      .filter(u => { try { new URL(u); return true; } catch { return false; } })
+      .slice(0, MAX);
+
+    const base = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
+
+    // process sequentially to stay under provider limits; adjust if needed
+    const results = [];
+    for (const inputUrl of slice) {
+      const rand = crypto.randomBytes(4).toString('hex');
+      const subid = `u${req.user._id.toString()}-${rand}`;
+      try {
+        const link = await buildDeeplink({ url: inputUrl, subid });
+        // store entry (optional)
+        await User.updateOne(
+          { _id: req.user._id },
+          { $push: { 'affiliateInfo.uniqueLinks': {
+            store: null,
+            customSlug: `cue-${rand}`,
+            clicks: 0,
+            conversions: 0,
+            metadata: { cuelinks: { subid, url: link, rawUrl: inputUrl } },
+            createdAt: new Date()
+          } } }
+        );
+        const shareUrl = `${base}/api/links/open-cuelinks/${subid}`;
+        results.push({ inputUrl, success: true, link, shareUrl, subid });
+      } catch (err) {
+        const msg = (err && err.message) ? String(err.message) : 'Failed';
+        results.push({ inputUrl, success: false, message: msg });
+      }
+    }
+
+    return res.json({ success: true, data: { results } });
+  } catch (err) {
+    console.error('bulk-deeplink error', err);
+    return res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+});
+
 module.exports = router;

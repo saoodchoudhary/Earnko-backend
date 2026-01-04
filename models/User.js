@@ -7,6 +7,10 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true, minlength: 6 },
   role: { type: String, enum: ['user','admin','affiliate'], default: 'user' },
 
+  // NEW: admin status & approval flags (used by admin/users routes)
+  accountStatus: { type: String, enum: ['active','hold','blocked'], default: 'active', index: true },
+  isApproved: { type: Boolean, default: true }, // keep for backend routes; set true if you don't use approvals
+
   // Social login
   provider: { type: String, enum: ['local','google'], default: 'local' },
   providerId: { type: String, default: '' },

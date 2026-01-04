@@ -39,6 +39,8 @@ app.use('/api/links', require('./routes/links'));
 app.use('/api/tracking', require('./routes/tracking'));
 app.use('/api/conversions', require('./routes/conversions'));
 app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/auth', require('./routes/auth.change-password'));
+
 // Admin...
 app.use('/api/admin/transactions', require('./routes/admin/transactions'));
 app.use('/api/admin/users', require('./routes/admin/users'));
@@ -50,6 +52,10 @@ app.use('/api/admin/webhooks', require('./routes/admin/webhooks'));
 app.use('/api/admin/settings', require('./routes/admin/settings'));
 app.use("/api/admin/commissions", require("./routes/admin/commissions"));
 app.use('/api/admin/support', require('./routes/admin/support'));
+
+// MISSING BEFORE: mount the admin cuelinks router
+app.use('/api/admin/cuelinks', require('./routes/admin/cuelinks'));
+
 
 // Public offers
 app.use('/api/public/offers', require('./routes/public/offers'));
@@ -64,6 +70,7 @@ app.use('/api/user/referrals', require('./routes/user/referrals'));
 app.use('/api/user/links', require('./routes/user/links')); // NEW
 app.use('/api/support', require('./routes/support'));
 app.use('/api/notifications', require('./routes/notifications'));
+
 
 // Cuelinks
 app.use('/api/affiliate/cuelinks', require('./routes/affiliate/cuelinks'));

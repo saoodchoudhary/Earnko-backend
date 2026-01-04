@@ -68,4 +68,28 @@ router.put('/:id/status', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
+
+// GET /api/conversions/:id (user-specific transaction detail)
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    // Accept either ObjectId (_id) or orderId lookup
+    const byId = await Transaction.findOne({ _id: id, user: req.user._id })
+      .populate('store', 'name category')
+      .lean();
+    const byOrderId = byId
+      ? null
+      : await Transaction.findOne({ orderId: id, user: req.user._id })
+          .populate('store', 'name category')
+          .lean();
+
+    const tx = byId || byOrderId;
+    if (!tx) return res.status(404).json({ success: false, message: 'Not found' });
+    return res.json({ success: true, data: { transaction: tx } });
+  } catch (err) {
+    console.error('user transaction detail error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 module.exports = router;
