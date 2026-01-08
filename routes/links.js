@@ -20,30 +20,34 @@ router.post('/generate', auth, requireRole('affiliate'), async (req, res) => {
   try {
     const { offerId } = req.body;
     const offer = await Commission.findById(offerId).populate('store');
-    if (!offer) return res.status(404).json({ success:false, message:'Offer not found' });
+    if (!offer) return res.status(404).json({ success: false, message: 'Offer not found' });
 
     const shortCode = crypto.randomBytes(4).toString('hex'); // 8-char code
     const customSlug = `${req.user._id.toString().slice(-6)}-${shortCode}`;
 
     await User.updateOne(
       { _id: req.user._id },
-      { $push: { 'affiliateInfo.uniqueLinks': {
-        store: offer.store._id,
-        customSlug,
-        clicks: 0,
-        conversions: 0,
-        metadata: { offerId },
-        createdAt: new Date()
-      } } }
+      {
+        $push: {
+          'affiliateInfo.uniqueLinks': {
+            store: offer.store._id,
+            customSlug,
+            clicks: 0,
+            conversions: 0,
+            metadata: { offerId },
+            createdAt: new Date()
+          }
+        }
+      }
     );
 
     const trackingBase = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
     const redirectUrl = `${trackingBase}/api/tracking/redirect/${customSlug}`;
 
-    res.status(201).json({ success:true, data: { link: { code: customSlug, url: redirectUrl, offer, store: offer.store } } });
+    res.status(201).json({ success: true, data: { link: { code: customSlug, url: redirectUrl, offer, store: offer.store } } });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success:false, message:'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -55,30 +59,34 @@ router.post('/generate-product', auth, requireRole('affiliate'), async (req, res
   try {
     const { productId } = req.body;
     const product = await Product.findById(productId).populate('store');
-    if (!product || !product.isActive) return res.status(404).json({ success:false, message:'Product not found' });
+    if (!product || !product.isActive) return res.status(404).json({ success: false, message: 'Product not found' });
 
     const shortCode = crypto.randomBytes(4).toString('hex');
     const customSlug = `${req.user._id.toString().slice(-6)}-${shortCode}`;
 
     await User.updateOne(
       { _id: req.user._id },
-      { $push: { 'affiliateInfo.uniqueLinks': {
-        store: product.store._id,
-        customSlug,
-        clicks: 0,
-        conversions: 0,
-        metadata: { productId: product._id, storeId: product.store._id },
-        createdAt: new Date()
-      } } }
+      {
+        $push: {
+          'affiliateInfo.uniqueLinks': {
+            store: product.store._id,
+            customSlug,
+            clicks: 0,
+            conversions: 0,
+            metadata: { productId: product._id, storeId: product.store._id },
+            createdAt: new Date()
+          }
+        }
+      }
     );
 
     const trackingBase = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
     const redirectUrl = `${trackingBase}/api/tracking/redirect/${customSlug}`;
 
-    res.status(201).json({ success:true, data: { link: { code: customSlug, url: redirectUrl, product, store: product.store } } });
+    res.status(201).json({ success: true, data: { link: { code: customSlug, url: redirectUrl, product, store: product.store } } });
   } catch (err) {
     console.error('generate-product error', err);
-    res.status(500).json({ success:false, message:'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -90,7 +98,7 @@ router.post('/generate-cuelinks-product', auth, requireRole('affiliate'), async 
   try {
     const { productId, channel_id, subid2, subid3, subid4, subid5 } = req.body || {};
     const product = await Product.findById(productId).populate('store');
-    if (!product || !product.isActive) return res.status(404).json({ success:false, message:'Product not found' });
+    if (!product || !product.isActive) return res.status(404).json({ success: false, message: 'Product not found' });
 
     const rand = crypto.randomBytes(4).toString('hex');
     const subid = `u${req.user._id.toString()}-${rand}`;
@@ -107,14 +115,14 @@ router.post('/generate-cuelinks-product', auth, requireRole('affiliate'), async 
       const msg = String(err.message || '').toLowerCase();
       if (msg.includes('campaign needs approval')) {
         let host = '';
-        try { host = new URL(product.deeplink).hostname.replace(/^www\./, ''); } catch {}
+        try { host = new URL(product.deeplink).hostname.replace(/^www\./, ''); } catch { }
         let suggestions = [];
         try {
           if (host) {
             const camp = await getCampaigns({ search_term: host, per_page: 30 });
             suggestions = camp?.campaigns || camp?.data || [];
           }
-        } catch {}
+        } catch { }
         return res.status(409).json({
           success: false,
           code: 'campaign_approval_required',
@@ -127,20 +135,24 @@ router.post('/generate-cuelinks-product', auth, requireRole('affiliate'), async 
 
     await User.updateOne(
       { _id: req.user._id },
-      { $push: { 'affiliateInfo.uniqueLinks': {
-        store: product.store?._id || null,
-        customSlug: `cue-${rand}`,
-        clicks: 0,
-        conversions: 0,
-        metadata: { productId: product._id, cuelinks: { subid, url: link } },
-        createdAt: new Date()
-      } } }
+      {
+        $push: {
+          'affiliateInfo.uniqueLinks': {
+            store: product.store?._id || null,
+            customSlug: `cue-${rand}`,
+            clicks: 0,
+            conversions: 0,
+            metadata: { productId: product._id, cuelinks: { subid, url: link } },
+            createdAt: new Date()
+          }
+        }
+      }
     );
 
     return res.json({ success: true, data: { link, subid } });
   } catch (err) {
     console.error('generate-cuelinks-product error', err);
-    return res.status(500).json({ success:false, message: err.message || 'Server error' });
+    return res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
 });
 
@@ -183,10 +195,11 @@ router.get('/open-cuelinks/:subid', async (req, res) => {
           user: userId,
           store: entry?.store || null,
           product: entry?.metadata?.productId || null,
-          slug: entry?.customSlug || null,
+          customSlug: entry?.customSlug || null,        // was: slug
           userAgent: req.get('user-agent'),
-          ip: req.ip,
-          referer: req.get('referer') || null
+          ipAddress: req.ip,                            // was: ip
+          referrer: req.get('referer') || null,         // was: referer (typo)
+          affiliateLink: destination || null
         });
       }
     }
