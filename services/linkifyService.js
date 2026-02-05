@@ -91,8 +91,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   if (provider === 'trackier') {
     const campaignId = getTrackierCampaignId(providerSafeUrl);
 
-    // IMPORTANT: Trackier bulk-deeplink commonly supports only p1..p5
-    // Put clickId in p1 so webhook can map it (configure postback to send click_id={p1} if needed).
+    // Put clickId in p1 so postback can map click_id={p1}
     const adnParams = { p1: clickId, p2: slug };
 
     const { url: deeplink, raw } = await trackier.buildDeeplink({
@@ -115,7 +114,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
         resolvedUrl,
         providerSafeUrl,
         generatedLink: deeplink,
-        campaignId: String(campaignId),
+        campaignId: String(campaignId || ''),
         raw
       }
     });

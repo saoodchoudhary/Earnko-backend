@@ -32,7 +32,6 @@ function toCanonicalUrl(inputUrl) {
   }
 }
 
-// keep only known vcommission params
 const VCOM_ALLOWLIST = new Set([
   'campaign_id', 'pub_id', 'click_id', 'clickid', 'cid',
   'txn_id', 'txnid', 'transaction_id', 'order_id', 'orderid',
@@ -105,8 +104,7 @@ async function postJson(url, body) {
   }
 
   if (!res.ok) {
-    // include provider response for debugging
-    const providerMsg = json?.message || json?.error || (text || '').slice(0, 500);
+    const providerMsg = json?.message || json?.error || (text || '').slice(0, 800);
     const err = new Error(providerMsg || `Trackier error (${res.status})`);
     err.status = res.status;
     err.body = json || text;
@@ -127,7 +125,9 @@ async function buildDeeplink({ url, campaignId, adnParams = null, encodeURL = fa
     err.code = 'bad_request';
     throw err;
   }
-  if (!campaignId) {
+
+  const cid = String(campaignId || '').trim();
+  if (!cid) {
     const err = new Error('Missing Trackier campaignId for this domain');
     err.code = 'missing_campaign_id';
     throw err;
@@ -137,7 +137,7 @@ async function buildDeeplink({ url, campaignId, adnParams = null, encodeURL = fa
   const endpoint = `${API_BASE}/v2/publishers/bulk-deeplink`;
 
   const payload = {
-    deeplinks: [{ url: normalizedInput, campaignIds: [String(campaignId)] }],
+    deeplinks: [{ url: normalizedInput, campaignIds: [cid] }],
     encodeURL: Boolean(encodeURL)
   };
 
