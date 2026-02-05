@@ -15,13 +15,6 @@ function assertKey() {
   }
 }
 
-/**
- * Safe cleanup:
- * - trim
- * - remove newlines/tabs (paste artifacts)
- * - decode &amp;
- * NOTE: We do NOT remove all spaces blindly here.
- */
 function cleanUrlString(s) {
   if (s == null) return '';
   let out = String(s).trim();
@@ -39,56 +32,28 @@ function toCanonicalUrl(inputUrl) {
   }
 }
 
-/**
- * Keep only known vcommission click params to avoid garbage params created by broken destination slugs.
- * Add more keys if needed later.
- */
+// keep only known vcommission params
 const VCOM_ALLOWLIST = new Set([
-  'campaign_id',
-  'pub_id',
-  'click_id',
-  'clickid',
-  'cid',
-  'txn_id',
-  'txnid',
-  'transaction_id',
-  'order_id',
-  'orderid',
-  'sale_amount',
-  'amount',
-  'payout',
-  'currency',
-  'conversion_status',
-  'status',
-  'campaignId',
-  'p1',
-  'p2',
-  'p3',
-  'p4',
-  'p5'
+  'campaign_id', 'pub_id', 'click_id', 'clickid', 'cid',
+  'txn_id', 'txnid', 'transaction_id', 'order_id', 'orderid',
+  'sale_amount', 'amount', 'payout', 'currency', 'conversion_status', 'status',
+  'p1', 'p2', 'p3', 'p4', 'p5'
 ]);
 
-/**
- * STRICTLY encode url= param for vcommission click links.
- * Also drops garbage query keys which sometimes appear when Trackier returns broken url values.
- */
 function repairVcommissionClickUrl(maybeClickUrl) {
   const s = cleanUrlString(maybeClickUrl);
-
   try {
     const u = new URL(s);
     const host = u.hostname.toLowerCase().replace(/^www\./, '');
     const isVcom = host === 'track.vcommission.com' || host.endsWith('vcommission.com');
     if (!isVcom) return toCanonicalUrl(s);
 
-    // destination URL might already be truncated if provider returned broken query.
     const rawDest = u.searchParams.get('url');
     if (!rawDest) return toCanonicalUrl(s);
 
     const destCanonical = toCanonicalUrl(cleanUrlString(rawDest));
     const encodedDest = encodeURIComponent(destCanonical);
 
-    // rebuild query using allowlist (prevents "&-iron-oxides...=..." garbage keys)
     const original = new URLSearchParams(u.search);
     const kept = [];
     for (const [k, v] of original.entries()) {
@@ -98,11 +63,23 @@ function repairVcommissionClickUrl(maybeClickUrl) {
 
     const keptQs = new URLSearchParams(kept).toString();
     const finalQs = keptQs ? `${keptQs}&url=${encodedDest}` : `url=${encodedDest}`;
-
     return `${u.origin}${u.pathname}?${finalQs}`;
   } catch {
     return toCanonicalUrl(s);
   }
+}
+
+/**
+ * Trackier bulk-deeplink API generally supports only p1..p5 in adnParams.
+ * Passing unsupported keys can cause 400.
+ */
+function sanitizeAdnParams(adnParams) {
+  if (!adnParams || typeof adnParams !== 'object') return null;
+  const out = {};
+  for (const k of ['p1', 'p2', 'p3', 'p4', 'p5']) {
+    if (adnParams[k] != null && adnParams[k] !== '') out[k] = String(adnParams[k]);
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 async function postJson(url, body) {
@@ -123,12 +100,14 @@ async function postJson(url, body) {
 
   if (DEBUG) {
     console.log('[TRACKIER]', res.status, url);
-    console.log('[TRACKIER] req=', JSON.stringify(body)?.slice(0, 800));
-    console.log('[TRACKIER] resp=', (text || '').slice(0, 800));
+    console.log('[TRACKIER] req=', JSON.stringify(body)?.slice(0, 1200));
+    console.log('[TRACKIER] resp=', (text || '').slice(0, 1200));
   }
 
   if (!res.ok) {
-    const err = new Error(json?.message || `Trackier error (${res.status})`);
+    // include provider response for debugging
+    const providerMsg = json?.message || json?.error || (text || '').slice(0, 500);
+    const err = new Error(providerMsg || `Trackier error (${res.status})`);
     err.status = res.status;
     err.body = json || text;
 
@@ -155,13 +134,15 @@ async function buildDeeplink({ url, campaignId, adnParams = null, encodeURL = fa
   }
 
   const normalizedInput = toCanonicalUrl(cleanUrlString(url));
-
   const endpoint = `${API_BASE}/v2/publishers/bulk-deeplink`;
+
   const payload = {
     deeplinks: [{ url: normalizedInput, campaignIds: [String(campaignId)] }],
     encodeURL: Boolean(encodeURL)
   };
-  if (adnParams && typeof adnParams === 'object') payload.adnParams = adnParams;
+
+  const safeAdn = sanitizeAdnParams(adnParams);
+  if (safeAdn) payload.adnParams = safeAdn;
 
   const json = await postJson(endpoint, payload);
 
@@ -173,7 +154,6 @@ async function buildDeeplink({ url, campaignId, adnParams = null, encodeURL = fa
     throw err;
   }
 
-  // Normalize provider output
   const outUrl = repairVcommissionClickUrl(outUrlRaw);
   return { url: outUrl, raw: json };
 }

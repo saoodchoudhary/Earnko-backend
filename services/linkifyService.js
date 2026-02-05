@@ -1,4 +1,8 @@
 const shortid = require('shortid');
+const cuelinks = require('./affiliateNetwork/cuelinks');
+const trackier = require('./affiliateNetwork/trackier');
+const extrape = require('./affiliateNetwork/extrape');
+const Click = require('../models/Click');
 const { normalizeAffiliateInputUrl, toCanonicalUrl, resolveFinalUrl, makeProviderSafeUrl } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
@@ -29,10 +33,6 @@ function getTrackierCampaignId(url) {
   return '';
 }
 
-/**
- * Strict generator that returns a SHARE URL (Earnko redirect).
- * The redirect endpoint generates provider deeplink with clickId embedded.
- */
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   const cleaned = normalizeAffiliateInputUrl(url);
   if (!cleaned) {
@@ -48,10 +48,103 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   const provider = pickProvider(resolvedUrl);
   const slug = shortid.generate();
 
-  const base = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
-  const shareUrl = `${base}/api/affiliate/redirect/${slug}`;
+  // Create clickId now so direct provider link is still attributable
+  const clickId = shortid.generate();
 
-  const campaignId = provider === 'trackier' ? String(getTrackierCampaignId(resolvedUrl) || '') : '';
+  await Click.create({
+    clickId,
+    user: user._id,
+    store: storeId || null,
+    ipAddress: null,
+    userAgent: null,
+    referrer: null,
+    customSlug: slug,
+    affiliateLink: null,
+    metadata: { source: 'link-from-url', provider, originalUrl: cleaned, resolvedUrl, providerSafeUrl }
+  });
+
+  if (provider === 'extrape') {
+    const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
+    const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
+
+    const { url: deeplink } = extrape.buildAffiliateLink({
+      originalUrl: providerSafeUrl,
+      affid,
+      affExtParam1,
+      subid: clickId
+    });
+
+    user.affiliateInfo.isAffiliate = true;
+    user.affiliateInfo.uniqueLinks.push({
+      store: storeId || null,
+      customSlug: slug,
+      clicks: 0,
+      conversions: 0,
+      metadata: { provider: 'extrape', clickId, originalUrl: cleaned, resolvedUrl, providerSafeUrl, generatedLink: deeplink }
+    });
+    await user.save();
+
+    await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
+    return { link: deeplink, method: 'extrape', slug, clickId };
+  }
+
+  if (provider === 'trackier') {
+    const campaignId = getTrackierCampaignId(providerSafeUrl);
+
+    // IMPORTANT: Trackier bulk-deeplink commonly supports only p1..p5
+    // Put clickId in p1 so webhook can map it (configure postback to send click_id={p1} if needed).
+    const adnParams = { p1: clickId, p2: slug };
+
+    const { url: deeplink, raw } = await trackier.buildDeeplink({
+      url: providerSafeUrl,
+      campaignId,
+      adnParams,
+      encodeURL: false
+    });
+
+    user.affiliateInfo.isAffiliate = true;
+    user.affiliateInfo.uniqueLinks.push({
+      store: storeId || null,
+      customSlug: slug,
+      clicks: 0,
+      conversions: 0,
+      metadata: {
+        provider: 'trackier',
+        clickId,
+        originalUrl: cleaned,
+        resolvedUrl,
+        providerSafeUrl,
+        generatedLink: deeplink,
+        campaignId: String(campaignId),
+        raw
+      }
+    });
+    await user.save();
+
+    await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
+    return { link: deeplink, method: 'trackier', slug, clickId };
+  }
+
+  // cuelinks
+  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl, subid: clickId });
+  const msg = String(cuelinksResp?.error || '').toLowerCase();
+
+  if (!cuelinksResp.success) {
+    if (msg.includes('campaign') && msg.includes('approval')) {
+      const err = new Error('Campaign approval required for this domain');
+      err.code = 'campaign_approval_required';
+      throw err;
+    }
+    const err = new Error(cuelinksResp.error || 'Failed to generate affiliate link');
+    err.code = 'provider_failed';
+    throw err;
+  }
+
+  if (!cuelinksResp.link) {
+    const err = new Error('Cuelinks did not return a link');
+    err.code = 'provider_failed';
+    throw err;
+  }
 
   user.affiliateInfo.isAffiliate = true;
   user.affiliateInfo.uniqueLinks.push({
@@ -59,18 +152,12 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     customSlug: slug,
     clicks: 0,
     conversions: 0,
-    metadata: {
-      provider,
-      originalUrl: cleaned,
-      resolvedUrl,
-      providerSafeUrl,
-      campaignId
-    }
+    metadata: { provider: 'cuelinks', clickId, originalUrl: cleaned, resolvedUrl, providerSafeUrl, generatedLink: cuelinksResp.link }
   });
-
   await user.save();
 
-  return { link: shareUrl, shareUrl, method: provider, slug };
+  await Click.updateOne({ clickId }, { $set: { affiliateLink: cuelinksResp.link } });
+  return { link: cuelinksResp.link, method: 'cuelinks', slug, clickId };
 }
 
 module.exports = { createAffiliateLinkStrict };
