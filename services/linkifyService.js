@@ -2,6 +2,7 @@ const shortid = require('shortid');
 const cuelinks = require('./affiliateNetwork/cuelinks');
 const trackier = require('./affiliateNetwork/trackier'); // VCommission/Trackier
 const extrape = require('./affiliateNetwork/extrape');   // Flipkart (Extrape)
+const { sanitizePastedUrl, resolveFinalUrl } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
   try {
@@ -15,15 +16,12 @@ function normalizeHost(inputUrl) {
 function pickProvider(url) {
   const host = normalizeHost(url);
 
-  // Flipkart -> Extrape
   if (host === 'flipkart.com' || host.endsWith('.flipkart.com')) return 'extrape';
 
-  // VCommission/Trackier brands
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return 'trackier';
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return 'trackier';
   if (host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com')) return 'trackier';
 
-  // default -> Cuelinks
   return 'cuelinks';
 }
 
@@ -44,11 +42,22 @@ function getTrackierCampaignId(url) {
 
 /**
  * STRICT universal generator.
- * - returns { link, method, slug }
+ * - returns { link, method, slug, subid? }
  * - throws errors when provider fails or campaign approval missing
  */
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
-  const provider = pickProvider(url);
+  // 1) sanitize pasted URL (fix Myntra broken links with spaces/newlines/&amp;)
+  const cleaned = sanitizePastedUrl(url);
+  if (!cleaned) {
+    const err = new Error('url required');
+    err.code = 'bad_request';
+    throw err;
+  }
+
+  // 2) resolve short links (fix Ajio app links ajioapps.oneclick.me -> ajio.com)
+  const resolvedUrl = await resolveFinalUrl(cleaned);
+
+  const provider = pickProvider(resolvedUrl);
 
   // Short slug for storing in user.uniqueLinks
   const slug = shortid.generate();
@@ -59,7 +68,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     const subid = `u${user._id.toString()}-${shortid.generate().slice(0, 8)}`;
 
     const { url: deeplink } = extrape.buildAffiliateLink({
-      originalUrl: url,
+      originalUrl: resolvedUrl,
       affid,
       affExtParam1,
       subid
@@ -73,7 +82,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       conversions: 0,
       metadata: {
         provider: 'extrape',
-        originalUrl: url,
+        originalUrl: cleaned,
+        resolvedUrl,
         generatedLink: deeplink,
         extrape: { affid, affExtParam1, subid }
       }
@@ -84,11 +94,13 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   }
 
   if (provider === 'trackier') {
-    const campaignId = getTrackierCampaignId(url);
-    const adnParams = { p1: `u${user._id.toString()}` };
+    const campaignId = getTrackierCampaignId(resolvedUrl);
+
+    // Keep p1=user id, add p2=slug for extra traceability
+    const adnParams = { p1: `u${user._id.toString()}`, p2: slug };
 
     const { url: deeplink, raw } = await trackier.buildDeeplink({
-      url,
+      url: resolvedUrl,
       campaignId,
       adnParams,
       encodeURL: false
@@ -102,7 +114,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       conversions: 0,
       metadata: {
         provider: 'trackier',
-        originalUrl: url,
+        originalUrl: cleaned,
+        resolvedUrl,
         generatedLink: deeplink,
         campaignId: String(campaignId),
         raw
@@ -114,7 +127,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   }
 
   // Default: Cuelinks (strict)
-  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: url });
+  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: resolvedUrl });
   const msg = String(cuelinksResp?.error || '').toLowerCase();
 
   if (!cuelinksResp.success) {
@@ -142,7 +155,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     conversions: 0,
     metadata: {
       provider: 'cuelinks',
-      originalUrl: url,
+      originalUrl: cleaned,
+      resolvedUrl,
       generatedLink: cuelinksResp.link,
       raw: cuelinksResp.raw || null
     }

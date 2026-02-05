@@ -14,7 +14,10 @@ router.post('/link-from-url', auth, async (req, res) => {
     const { url, storeId } = req.body;
     if (!url) return res.status(400).json({ success: false, message: 'URL required' });
 
-    const result = await createAffiliateLinkStrict({ user: req.user, url, storeId });
+    const user = await User.findById(req.user?._id);
+    if (!user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+    const result = await createAffiliateLinkStrict({ user, url, storeId });
     return res.json({ success: true, data: result });
   } catch (err) {
     const code = err.code || 'error';
@@ -49,10 +52,13 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
     const MAX = 25;
     const slice = urls.slice(0, MAX);
 
+    const user = await User.findById(req.user?._id);
+    if (!user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
     const results = [];
     for (const inputUrl of slice) {
       try {
-        const data = await createAffiliateLinkStrict({ user: req.user, url: inputUrl, storeId: null });
+        const data = await createAffiliateLinkStrict({ user, url: inputUrl, storeId: null });
         results.push({ inputUrl, success: true, data });
       } catch (err) {
         results.push({
@@ -98,7 +104,6 @@ router.get('/redirect/:slug', async (req, res) => {
     const cookieDays = store?.cookieDuration || 30;
     res.cookie('earnko_clickId', clickId, { maxAge: cookieDays * 24 * 60 * 60 * 1000, httpOnly: true, sameSite: 'Lax' });
 
-    // STRICT: only redirect if provider link exists
     const target = linkInfo.metadata?.generatedLink;
     if (!target) return res.redirect(process.env.FRONTEND_URL || '/');
 
