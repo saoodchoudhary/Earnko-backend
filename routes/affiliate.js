@@ -6,9 +6,14 @@ const Click = require('../models/Click');
 const { createAffiliateLinkStrict } = require('../services/linkifyService');
 const shortid = require('shortid');
 
+const trackier = require('../services/affiliateNetwork/trackier');
+const extrape = require('../services/affiliateNetwork/extrape');
+const { buildDeeplink: buildCuelinksDeeplink } = require('../services/cuelinks');
+
 const router = express.Router();
 
 // UNIVERSAL: Create affiliate link from pasted URL (STRICT)
+// Returns shareUrl (Earnko redirect)
 router.post('/link-from-url', auth, async (req, res) => {
   try {
     const { url, storeId } = req.body;
@@ -20,32 +25,11 @@ router.post('/link-from-url', auth, async (req, res) => {
     const result = await createAffiliateLinkStrict({ user, url, storeId });
     return res.json({ success: true, data: result });
   } catch (err) {
-    const code = err.code || 'error';
-
-    if (code === 'campaign_approval_required') {
-      return res.status(409).json({ success: false, code, message: err.message || 'Campaign approval required' });
-    }
-    if (code === 'trackier_invalid_key') {
-      return res.status(401).json({ success: false, code, message: 'Trackier API key invalid' });
-    }
-    if (code === 'trackier_forbidden') {
-      return res.status(403).json({ success: false, code, message: 'Trackier forbidden / no permission' });
-    }
-    if (code === 'missing_campaign_id') {
-      return res.status(400).json({ success: false, code, message: err.message || 'Missing campaign id' });
-    }
-    if (code === 'missing_extrape_affid') {
-      return res.status(400).json({ success: false, code, message: 'Missing EXTRAPE_AFFID' });
-    }
-    if (code === 'missing_subid') {
-      return res.status(400).json({ success: false, code, message: 'Missing subid' });
-    }
-
-    return res.status(500).json({ success: false, code, message: err.message || 'Server error' });
+    return res.status(500).json({ success: false, code: err.code || 'error', message: err.message || 'Server error' });
   }
 });
 
-// UNIVERSAL BULK: Create multiple links (STRICT, max 25)
+// UNIVERSAL BULK: Create multiple shareUrls (STRICT)
 router.post('/link-from-url/bulk', auth, async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
@@ -61,33 +45,39 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
         const data = await createAffiliateLinkStrict({ user, url: inputUrl, storeId: null });
         results.push({ inputUrl, success: true, data });
       } catch (err) {
-        results.push({
-          inputUrl,
-          success: false,
-          code: err.code || 'error',
-          message: err.message || 'Failed'
-        });
+        results.push({ inputUrl, success: false, code: err.code || 'error', message: err.message || 'Failed' });
       }
     }
 
     return res.json({ success: true, data: { results } });
-  } catch (err) {
+  } catch {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// Redirect by slug — when visitor clicks affiliate link
+// Redirect by slug — creates ClickId and embeds into provider link
 router.get('/redirect/:slug', async (req, res) => {
   try {
     const slug = req.params.slug;
+
     const user = await User.findOne({ 'affiliateInfo.uniqueLinks.customSlug': slug });
     if (!user) return res.redirect(process.env.FRONTEND_URL || '/');
 
     const linkInfo = user.affiliateInfo.uniqueLinks.find(l => l.customSlug === slug);
     if (!linkInfo) return res.redirect(process.env.FRONTEND_URL || '/');
 
-    // record click
+    const provider = linkInfo.metadata?.provider || 'cuelinks';
+    const destinationUrl =
+      linkInfo.metadata?.providerSafeUrl ||
+      linkInfo.metadata?.resolvedUrl ||
+      linkInfo.metadata?.originalUrl;
+
+    if (!destinationUrl) return res.redirect(process.env.FRONTEND_URL || '/');
+
+    // Create click id
     const clickId = shortid.generate();
+
+    // Record click
     await Click.create({
       clickId,
       user: user._id,
@@ -96,16 +86,48 @@ router.get('/redirect/:slug', async (req, res) => {
       userAgent: req.get('user-agent'),
       referrer: req.get('referer') || null,
       customSlug: slug,
-      affiliateLink: linkInfo.metadata?.generatedLink || null
+      affiliateLink: null,
+      metadata: { provider, destinationUrl }
     });
 
-    // set cookie for attribution
+    // Cookie (optional)
     const store = linkInfo.store ? await Store.findById(linkInfo.store) : null;
     const cookieDays = store?.cookieDuration || 30;
-    res.cookie('earnko_clickId', clickId, { maxAge: cookieDays * 24 * 60 * 60 * 1000, httpOnly: true, sameSite: 'Lax' });
+    res.cookie('earnko_clickId', clickId, {
+      maxAge: cookieDays * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: 'Lax'
+    });
 
-    const target = linkInfo.metadata?.generatedLink;
-    if (!target) return res.redirect(process.env.FRONTEND_URL || '/');
+    // Build provider deeplink with clickId embedded (CRITICAL)
+    let target = destinationUrl;
+
+    if (provider === 'extrape') {
+      const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
+      const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
+
+      target = extrape.buildAffiliateLink({
+        originalUrl: destinationUrl,
+        affid,
+        affExtParam1,
+        subid: clickId
+      }).url;
+    } else if (provider === 'trackier') {
+      const campaignId = linkInfo.metadata?.campaignId || '';
+      const adnParams = { click_id: clickId, p1: clickId, p2: slug };
+
+      target = (await trackier.buildDeeplink({
+        url: destinationUrl,
+        campaignId,
+        adnParams,
+        encodeURL: false
+      })).url;
+    } else {
+      // cuelinks default
+      target = await buildCuelinksDeeplink({ url: destinationUrl, subid: clickId });
+    }
+
+    await Click.updateOne({ clickId }, { $set: { affiliateLink: target } });
 
     return res.redirect(target);
   } catch (err) {

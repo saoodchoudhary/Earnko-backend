@@ -1,7 +1,4 @@
 const shortid = require('shortid');
-const cuelinks = require('./affiliateNetwork/cuelinks');
-const trackier = require('./affiliateNetwork/trackier');
-const extrape = require('./affiliateNetwork/extrape');
 const { normalizeAffiliateInputUrl, toCanonicalUrl, resolveFinalUrl, makeProviderSafeUrl } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
@@ -32,6 +29,10 @@ function getTrackierCampaignId(url) {
   return '';
 }
 
+/**
+ * Strict generator that returns a SHARE URL (Earnko redirect).
+ * The redirect endpoint generates provider deeplink with clickId embedded.
+ */
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   const cleaned = normalizeAffiliateInputUrl(url);
   if (!cleaned) {
@@ -42,90 +43,15 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
 
   const resolvedRaw = await resolveFinalUrl(cleaned);
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
+  const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
   const provider = pickProvider(resolvedUrl);
   const slug = shortid.generate();
 
-  if (provider === 'extrape') {
-    const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
-    const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
-    const subid = `u${user._id.toString()}-${shortid.generate().slice(0, 8)}`;
+  const base = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
+  const shareUrl = `${base}/api/affiliate/redirect/${slug}`;
 
-    const { url: deeplink } = extrape.buildAffiliateLink({
-      originalUrl: resolvedUrl,
-      affid,
-      affExtParam1,
-      subid
-    });
-
-    user.affiliateInfo.isAffiliate = true;
-    user.affiliateInfo.uniqueLinks.push({
-      store: storeId || null,
-      customSlug: slug,
-      clicks: 0,
-      conversions: 0,
-      metadata: { provider: 'extrape', originalUrl: cleaned, resolvedUrl, generatedLink: deeplink }
-    });
-    await user.save();
-
-    return { link: deeplink, method: 'extrape', slug, subid };
-  }
-
-  if (provider === 'trackier') {
-    const campaignId = getTrackierCampaignId(resolvedUrl);
-
-    // CRITICAL: safe Myntra URL built from productId to avoid '&' in slug path
-    const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
-
-    const adnParams = { p1: `u${user._id.toString()}`, p2: slug };
-
-    const { url: deeplink, raw } = await trackier.buildDeeplink({
-      url: providerSafeUrl,
-      campaignId,
-      adnParams,
-      encodeURL: false
-    });
-
-    user.affiliateInfo.isAffiliate = true;
-    user.affiliateInfo.uniqueLinks.push({
-      store: storeId || null,
-      customSlug: slug,
-      clicks: 0,
-      conversions: 0,
-      metadata: {
-        provider: 'trackier',
-        originalUrl: cleaned,
-        resolvedUrl,
-        providerSafeUrl,
-        generatedLink: deeplink,
-        campaignId: String(campaignId),
-        raw
-      }
-    });
-    await user.save();
-
-    return { link: deeplink, method: 'trackier', slug };
-  }
-
-  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: resolvedUrl });
-  const msg = String(cuelinksResp?.error || '').toLowerCase();
-
-  if (!cuelinksResp.success) {
-    if (msg.includes('campaign') && msg.includes('approval')) {
-      const err = new Error('Campaign approval required for this domain');
-      err.code = 'campaign_approval_required';
-      throw err;
-    }
-    const err = new Error(cuelinksResp.error || 'Failed to generate affiliate link');
-    err.code = 'provider_failed';
-    throw err;
-  }
-
-  if (!cuelinksResp.link) {
-    const err = new Error('Cuelinks did not return a link');
-    err.code = 'provider_failed';
-    throw err;
-  }
+  const campaignId = provider === 'trackier' ? String(getTrackierCampaignId(resolvedUrl) || '') : '';
 
   user.affiliateInfo.isAffiliate = true;
   user.affiliateInfo.uniqueLinks.push({
@@ -133,11 +59,18 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     customSlug: slug,
     clicks: 0,
     conversions: 0,
-    metadata: { provider: 'cuelinks', originalUrl: cleaned, resolvedUrl, generatedLink: cuelinksResp.link }
+    metadata: {
+      provider,
+      originalUrl: cleaned,
+      resolvedUrl,
+      providerSafeUrl,
+      campaignId
+    }
   });
+
   await user.save();
 
-  return { link: cuelinksResp.link, method: 'cuelinks', slug };
+  return { link: shareUrl, shareUrl, method: provider, slug };
 }
 
 module.exports = { createAffiliateLinkStrict };

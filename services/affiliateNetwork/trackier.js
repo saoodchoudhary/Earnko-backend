@@ -15,11 +15,17 @@ function assertKey() {
   }
 }
 
+/**
+ * Safe cleanup:
+ * - trim
+ * - remove newlines/tabs (paste artifacts)
+ * - decode &amp;
+ * NOTE: We do NOT remove all spaces blindly here.
+ */
 function cleanUrlString(s) {
   if (s == null) return '';
   let out = String(s).trim();
   out = out.replace(/[\r\n\t]+/g, '');
-  out = out.replace(/\s+/g, '');
   out = out.replace(/&amp;/gi, '&');
   return out;
 }
@@ -34,9 +40,37 @@ function toCanonicalUrl(inputUrl) {
 }
 
 /**
+ * Keep only known vcommission click params to avoid garbage params created by broken destination slugs.
+ * Add more keys if needed later.
+ */
+const VCOM_ALLOWLIST = new Set([
+  'campaign_id',
+  'pub_id',
+  'click_id',
+  'clickid',
+  'cid',
+  'txn_id',
+  'txnid',
+  'transaction_id',
+  'order_id',
+  'orderid',
+  'sale_amount',
+  'amount',
+  'payout',
+  'currency',
+  'conversion_status',
+  'status',
+  'campaignId',
+  'p1',
+  'p2',
+  'p3',
+  'p4',
+  'p5'
+]);
+
+/**
  * STRICTLY encode url= param for vcommission click links.
- * We do NOT rely on URLSearchParams encoding here; we force encodeURIComponent
- * because the destination may contain reserved characters like '&' in path/query.
+ * Also drops garbage query keys which sometimes appear when Trackier returns broken url values.
  */
 function repairVcommissionClickUrl(maybeClickUrl) {
   const s = cleanUrlString(maybeClickUrl);
@@ -45,28 +79,27 @@ function repairVcommissionClickUrl(maybeClickUrl) {
     const u = new URL(s);
     const host = u.hostname.toLowerCase().replace(/^www\./, '');
     const isVcom = host === 'track.vcommission.com' || host.endsWith('vcommission.com');
-
     if (!isVcom) return toCanonicalUrl(s);
 
+    // destination URL might already be truncated if provider returned broken query.
     const rawDest = u.searchParams.get('url');
     if (!rawDest) return toCanonicalUrl(s);
 
-    // Canonicalize the destination first
     const destCanonical = toCanonicalUrl(cleanUrlString(rawDest));
-
-    // Now rebuild query string manually with strict encoding for url=
-    const params = new URLSearchParams(u.search);
-    params.delete('url');
-    // Force strict encode
     const encodedDest = encodeURIComponent(destCanonical);
-    // URLSearchParams will encode again if we set encoded string, so we append manually.
-    // Build final query:
-    const baseQs = params.toString();
-    const finalQs = baseQs ? `${baseQs}&url=${encodedDest}` : `url=${encodedDest}`;
 
-    // Keep same origin + pathname
-    const out = `${u.origin}${u.pathname}?${finalQs}`;
-    return out;
+    // rebuild query using allowlist (prevents "&-iron-oxides...=..." garbage keys)
+    const original = new URLSearchParams(u.search);
+    const kept = [];
+    for (const [k, v] of original.entries()) {
+      if (k === 'url') continue;
+      if (VCOM_ALLOWLIST.has(k)) kept.push([k, v]);
+    }
+
+    const keptQs = new URLSearchParams(kept).toString();
+    const finalQs = keptQs ? `${keptQs}&url=${encodedDest}` : `url=${encodedDest}`;
+
+    return `${u.origin}${u.pathname}?${finalQs}`;
   } catch {
     return toCanonicalUrl(s);
   }
@@ -140,6 +173,7 @@ async function buildDeeplink({ url, campaignId, adnParams = null, encodeURL = fa
     throw err;
   }
 
+  // Normalize provider output
   const outUrl = repairVcommissionClickUrl(outUrlRaw);
   return { url: outUrl, raw: json };
 }
