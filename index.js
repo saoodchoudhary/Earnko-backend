@@ -80,8 +80,11 @@ app.use('/api/notifications', require('./routes/notifications'));
 
 // Cuelinks
 app.use('/api/affiliate/cuelinks', require('./routes/affiliate/cuelinks'));
-app.use('/api/webhooks/cuelinks', require('./routes/webhooks/cuelinks'));
 app.use('/api/admin/category-commissions', require('./routes/admin/category-commissions'));
+
+app.use('/api/webhooks/cuelinks', require('./routes/webhooks/cuelinks'));
+app.use('/api/webhooks/extrape', require('./routes/webhooks/extrape'));
+app.use('/api/webhooks/trackier', require('./routes/webhooks/trackier'));
 
 // User analytics
 app.use('/api/user/analytics', require('./routes/user/analytics'));
