@@ -1,23 +1,22 @@
-const axios = require('axios');
-const BASE = process.env.CUELINKS_BASE_URL || process.env.CUELINKS_BASE_URL || 'https://api.cuelinks.com';
-const API_KEY = process.env.CUELINKS_API_KEY || '';
+// Cuelinks link generator used by universal linkifyService.
+// Use the same v2 API as services/cuelinks.js (links.json) instead of /link/convert (which can 404).
+
+const crypto = require('crypto');
+const { buildDeeplink } = require('../cuelinks');
 
 async function buildAffiliateLink({ originalUrl }) {
   try {
-    // Example — adjust endpoint and request format per your Cuelinks docs
-    const resp = await axios.post(`${BASE}/link/convert`, { url: originalUrl }, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` }
-    });
-    if (resp.data && resp.data.data) {
-      return { success: true, link: resp.data.data.affiliate_link || resp.data.data.track_link || resp.data.data.url, raw: resp.data.data };
-    }
-    return { success: false, error: 'Unexpected response', raw: resp.data };
+    if (!originalUrl) return { success: false, error: 'originalUrl required' };
+
+    // Optional: attach a random subid for tracking on Cuelinks side
+    const subid = `gen-${crypto.randomBytes(4).toString('hex')}`;
+
+    const link = await buildDeeplink({ url: originalUrl, subid });
+    return { success: true, link, raw: { subid } };
   } catch (err) {
-    console.error('Cuelinks error', err.message);
-    return { success: false, error: err.message };
+    const msg = String(err?.message || 'Cuelinks error');
+    return { success: false, error: msg, raw: err?.body || null };
   }
 }
 
-module.exports = {
-  buildAffiliateLink
-};
+module.exports = { buildAffiliateLink };

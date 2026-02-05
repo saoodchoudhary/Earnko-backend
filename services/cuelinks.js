@@ -3,7 +3,11 @@
 
 let fetchFn = globalThis.fetch;
 if (!fetchFn) {
-  try { fetchFn = require('undici').fetch; } catch { throw new Error('No fetch available. Install undici or use Node 18+'); }
+  try {
+    fetchFn = require('undici').fetch;
+  } catch {
+    throw new Error('No fetch available. Install undici or use Node 18+');
+  }
 }
 
 const API_BASE = process.env.CUELINKS_API_BASE || 'https://www.cuelinks.com/api/v2';
@@ -11,30 +15,70 @@ const API_KEY = process.env.CUELINKS_API_KEY;
 const DEBUG = String(process.env.CUELINKS_DEBUG || '').toLowerCase() === 'true';
 const CUELINKS_COUNTRY_ID = process.env.CUELINKS_COUNTRY_ID || '';
 
-function assertKey() { if (!API_KEY) throw new Error('Missing CUELINKS_API_KEY'); }
+function assertKey() {
+  if (!API_KEY) throw new Error('Missing CUELINKS_API_KEY');
+}
+
 function headerVariants() {
   assertKey();
   const base = { Accept: 'application/json' };
   return [
     { ...base, token: API_KEY }, // per docs
     { ...base, Authorization: `Token token=${API_KEY}` }, // alt style
-    { ...base, Authorization: `Bearer ${API_KEY}` }, // last resort
+    { ...base, Authorization: `Bearer ${API_KEY}` } // last resort
   ];
 }
+
 async function fetchWithVariants(url, options = {}) {
   const variants = headerVariants();
-  let lastErr = null;
+  let lastAuthErr = null;
+
   for (let i = 0; i < variants.length; i++) {
-    const hdrs = { ...(options.headers || {}), ...variants[i] };
-    const res = await fetchFn(url, { ...options, headers: hdrs });
-    const text = await res.text();
-    let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
-    if (DEBUG) console.log('[CUELINKS]', res.status, url, 'v=', i, 'resp=', text?.slice(0, 400));
+    const headers = { ...(options.headers || {}), ...variants[i] };
+
+    let res;
+    let text = '';
+    let json = null;
+
+    try {
+      res = await fetchFn(url, { ...options, headers });
+      text = await res.text();
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+    } catch (e) {
+      const err = new Error(e?.message || 'Network error calling Cuelinks');
+      err.code = 'cuelinks_network_error';
+      throw err;
+    }
+
+    if (DEBUG) {
+      console.log('[CUELINKS]', 'variant=', i, 'status=', res.status, 'url=', url);
+      console.log('[CUELINKS]', 'resp=', (text || '').slice(0, 400));
+    }
+
     if (res.ok) return { res, json };
-    if (res.status === 401 || res.status === 403) { lastErr = new Error(json?.message || json?.error || `Unauthorized (${res.status})`); lastErr.status = res.status; lastErr.body = json || text; continue; }
-    const err = new Error(json?.message || json?.error || `Cuelinks error (${res.status})`); err.status = res.status; err.body = json || text; throw err;
+
+    // auth/permission: try next variant
+    if (res.status === 401 || res.status === 403) {
+      lastAuthErr = new Error(json?.message || json?.error || `Unauthorized (${res.status})`);
+      lastAuthErr.status = res.status;
+      lastAuthErr.body = json || text;
+      continue;
+    }
+
+    // non-auth error: stop immediately
+    const err = new Error(json?.message || json?.error || `Cuelinks error (${res.status})`);
+    err.status = res.status;
+    err.body = json || text;
+    throw err;
   }
-  if (lastErr) throw lastErr;
+
+  // if all variants failed due to auth
+  if (lastAuthErr) throw lastAuthErr;
+
   throw new Error('Cuelinks request failed (no header variant worked)');
 }
 
@@ -79,6 +123,7 @@ async function buildDeeplink({ url, subid, channel_id, subid2, subid3, subid4, s
 
   const err = new Error('Cuelinks: no short_url in response');
   err.body = json;
+  err.code = 'cuelinks_no_short_url';
   throw err;
 }
 
@@ -94,6 +139,7 @@ async function getCampaigns({ search_term = '', page = 1, per_page = 30, country
   const cid = country_id || CUELINKS_COUNTRY_ID;
   if (cid) params.set('country_id', String(cid));
   if (categories) params.set('categories', String(categories));
+
   const endpoint = `${API_BASE}/campaigns.json?${params.toString()}`;
   const { json } = await fetchWithVariants(endpoint, { method: 'GET' });
   return json;
