@@ -47,19 +47,15 @@ function normalizeHost(inputUrl) {
  */
 function normalizeMyntraUrl(inputUrl) {
   try {
-    const u = new URL(inputUrl);
     const host = normalizeHost(inputUrl);
     if (!(host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it')) return inputUrl;
 
+    const u = new URL(inputUrl);
     const path = u.pathname || '';
-    // Myntra PDP usually contains "/<productId>/" somewhere
     const m = path.match(/\/(\d{6,12})(\/|$)/);
     const productId = m?.[1] || null;
-
     if (!productId) return inputUrl;
 
-    // safest short canonical PDP: /<productId>
-    // keep utm params optional (not needed for tracking; trackier will wrap anyway)
     return `https://www.myntra.com/${productId}`;
   } catch {
     return inputUrl;
@@ -91,38 +87,35 @@ function isHttpUrl(url) {
   }
 }
 
-async function resolveFinalUrl(inputUrl, { maxHops = 8, timeoutMs = 8000 } = {}) {
+/**
+ * Resolve final URL for short/app links (Ajio OneLink, fkrt.it, etc).
+ * We use GET with redirect:'follow' to let fetch handle redirect chains.
+ */
+async function resolveFinalUrl(inputUrl, { timeoutMs = 10000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
 
-  let current = inputUrl;
-  for (let i = 0; i < maxHops; i++) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
-    try {
-      let res = await fetchFn(current, { method: 'HEAD', redirect: 'manual', signal: ctrl.signal });
-      if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-        current = new URL(res.headers.get('location'), current).toString();
-        continue;
+  try {
+    const res = await fetchFn(inputUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: ctrl.signal,
+      headers: {
+        // Some short-link providers behave better with a UA
+        'User-Agent': 'Mozilla/5.0 (compatible; EarnkoBot/1.0; +https://earnko.com)'
       }
+    });
 
-      if (res.status === 405 || res.status === 403 || res.status === 400) {
-        res = await fetchFn(current, { method: 'GET', redirect: 'manual', signal: ctrl.signal });
-        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-          current = new URL(res.headers.get('location'), current).toString();
-          continue;
-        }
-      }
-
-      return current;
-    } catch {
-      return current;
-    } finally {
-      clearTimeout(t);
-    }
+    // undici/fetch exposes final url as res.url
+    const finalUrl = res?.url || inputUrl;
+    return finalUrl;
+  } catch {
+    return inputUrl;
+  } finally {
+    clearTimeout(t);
   }
-
-  return current;
 }
 
 module.exports = {

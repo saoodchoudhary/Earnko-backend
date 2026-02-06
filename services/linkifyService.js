@@ -27,6 +27,10 @@ function isMyntraHost(host) {
   return host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it';
 }
 
+function isAjioAppHost(host) {
+  return host === 'ajioapps.onelink.me' || host === 'ajio.page.link';
+}
+
 function isAjioHost(host) {
   return (
     host === 'ajio.com' ||
@@ -65,11 +69,24 @@ function getTrackierCampaignId(url) {
   return '';
 }
 
+function buildShareUrl(slug) {
+  const base = (process.env.BACKEND_URL || 'https://api.earnko.com').replace(/\/+$/, '');
+  return `${base}/api/affiliate/redirect/${slug}`;
+}
+
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   const cleaned = normalizeAffiliateInputUrl(url);
   if (!cleaned) {
     const err = new Error('url required');
     err.code = 'bad_request';
+    throw err;
+  }
+
+  // AJIO app links: tell user to paste website link
+  const inputHost = normalizeHost(cleaned);
+  if (isAjioAppHost(inputHost)) {
+    const err = new Error('AJIO app links are not supported. Please paste AJIO website product link (ajio.com/...)');
+    err.code = 'ajio_app_link_not_supported';
     throw err;
   }
 
@@ -80,8 +97,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   // make provider-safe (currently special handling for Myntra)
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
-  // IMPORTANT: provider should be based on whichever is more informative
-  // If resolve fails, resolvedUrl may still be onelink; pickProvider handles that now.
   const provider = pickProvider(providerSafeUrl || resolvedUrl || cleaned);
   const slug = shortid.generate();
 
@@ -105,7 +120,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
 
     const { url: deeplink } = extrape.buildAffiliateLink({
-      originalUrl: providerSafeUrl || resolvedUrl || cleaned,
+      originalUrl: providerSafeUrl,
       affid,
       affExtParam1,
       subid: clickId
@@ -122,16 +137,25 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     await user.save();
 
     await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
-    return { link: deeplink, method: 'extrape', slug, clickId };
+
+    return {
+      link: deeplink,
+      providerLink: deeplink,
+      shareUrl: buildShareUrl(slug),
+      method: 'extrape',
+      slug,
+      clickId
+    };
   }
 
   if (provider === 'trackier') {
-    const campaignId = getTrackierCampaignId(providerSafeUrl || resolvedUrl || cleaned);
+    const campaignId = getTrackierCampaignId(providerSafeUrl);
 
+    // Put clickId in p1 so postback can map click_id={p1}
     const adnParams = { p1: clickId, p2: slug };
 
     const { url: deeplink, raw } = await trackier.buildDeeplink({
-      url: providerSafeUrl || resolvedUrl || cleaned,
+      url: providerSafeUrl,
       campaignId,
       adnParams,
       encodeURL: false
@@ -157,11 +181,19 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     await user.save();
 
     await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
-    return { link: deeplink, method: 'trackier', slug, clickId };
+
+    return {
+      link: deeplink,
+      providerLink: deeplink,
+      shareUrl: buildShareUrl(slug),
+      method: 'trackier',
+      slug,
+      clickId
+    };
   }
 
   // cuelinks
-  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl || resolvedUrl || cleaned, subid: clickId });
+  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl, subid: clickId });
   const msg = String(cuelinksResp?.error || '').toLowerCase();
 
   if (!cuelinksResp.success) {
@@ -192,7 +224,15 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   await user.save();
 
   await Click.updateOne({ clickId }, { $set: { affiliateLink: cuelinksResp.link } });
-  return { link: cuelinksResp.link, method: 'cuelinks', slug, clickId };
+
+  return {
+    link: cuelinksResp.link,
+    providerLink: cuelinksResp.link,
+    shareUrl: buildShareUrl(slug),
+    method: 'cuelinks',
+    slug,
+    clickId
+  };
 }
 
 module.exports = { createAffiliateLinkStrict };

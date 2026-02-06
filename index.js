@@ -62,7 +62,7 @@ app.use('/api/admin/support', require('./routes/admin/support'));
 // MISSING BEFORE: mount the admin cuelinks router
 app.use('/api/admin/cuelinks', require('./routes/admin/cuelinks'));
 
-
+app.use('/r', require('./routes/shortUrl'));
 // Public offers
 app.use('/api/public/offers', require('./routes/public/offers'));
 // products
