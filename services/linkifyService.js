@@ -14,22 +14,54 @@ function normalizeHost(inputUrl) {
   }
 }
 
+function isFlipkartHost(host) {
+  return (
+    host === 'flipkart.com' ||
+    host.endsWith('.flipkart.com') ||
+    host === 'dl.flipkart.com' ||
+    host === 'fkrt.it'
+  );
+}
+
+function isMyntraHost(host) {
+  return host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it';
+}
+
+function isAjioHost(host) {
+  return (
+    host === 'ajio.com' ||
+    host.endsWith('.ajio.com') ||
+    host === 'ajioapps.onelink.me' ||
+    host.endsWith('.onelink.me') || // keep broad only if you are sure; else remove
+    host === 'ajio.page.link'
+  );
+}
+
+function isTiraHost(host) {
+  return host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com');
+}
+
 function pickProvider(url) {
   const host = normalizeHost(url);
-  if (host === 'flipkart.com' || host.endsWith('.flipkart.com')) return 'extrape';
-  if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return 'trackier';
-  if (host === 'ajio.com' || host.endsWith('.ajio.com')) return 'trackier';
-  if (host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com')) return 'trackier';
+
+  if (isFlipkartHost(host)) return 'extrape';
+  if (isMyntraHost(host)) return 'trackier';
+  if (isAjioHost(host)) return 'trackier';
+  if (isTiraHost(host)) return 'trackier';
+
   return 'cuelinks';
 }
 
 function getTrackierCampaignId(url) {
   const host = normalizeHost(url);
-  if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') {
+
+  if (isMyntraHost(host)) {
     return process.env.TRACKIER_MYNTRA_CAMPAIGN_ID || process.env.TRACKIER_MYNTTRA_CAMPAIGN_ID || '';
   }
-  if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.TRACKIER_AJIO_CAMPAIGN_ID || '';
-  if (host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com')) return process.env.TRACKIER_TIRABEAUTY_CAMPAIGN_ID || '';
+  if (isAjioHost(host)) return process.env.TRACKIER_AJIO_CAMPAIGN_ID || '';
+  if (isTiraHost(host)) return process.env.TRACKIER_TIRABEAUTY_CAMPAIGN_ID || '';
+
+  // fallback none
   return '';
 }
 
@@ -41,14 +73,19 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
+  // try resolve short/app links -> final merchant URL (best effort)
   const resolvedRaw = await resolveFinalUrl(cleaned);
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
+
+  // make provider-safe (currently special handling for Myntra)
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
-  const provider = pickProvider(resolvedUrl);
+  // IMPORTANT: provider should be based on whichever is more informative
+  // If resolve fails, resolvedUrl may still be onelink; pickProvider handles that now.
+  const provider = pickProvider(providerSafeUrl || resolvedUrl || cleaned);
   const slug = shortid.generate();
 
-  // Create clickId now so direct provider link is still attributable
+  // click id for attribution
   const clickId = shortid.generate();
 
   await Click.create({
@@ -68,7 +105,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
 
     const { url: deeplink } = extrape.buildAffiliateLink({
-      originalUrl: providerSafeUrl,
+      originalUrl: providerSafeUrl || resolvedUrl || cleaned,
       affid,
       affExtParam1,
       subid: clickId
@@ -89,13 +126,12 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   }
 
   if (provider === 'trackier') {
-    const campaignId = getTrackierCampaignId(providerSafeUrl);
+    const campaignId = getTrackierCampaignId(providerSafeUrl || resolvedUrl || cleaned);
 
-    // Put clickId in p1 so postback can map click_id={p1}
     const adnParams = { p1: clickId, p2: slug };
 
     const { url: deeplink, raw } = await trackier.buildDeeplink({
-      url: providerSafeUrl,
+      url: providerSafeUrl || resolvedUrl || cleaned,
       campaignId,
       adnParams,
       encodeURL: false
@@ -125,7 +161,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   }
 
   // cuelinks
-  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl, subid: clickId });
+  const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl || resolvedUrl || cleaned, subid: clickId });
   const msg = String(cuelinksResp?.error || '').toLowerCase();
 
   if (!cuelinksResp.success) {

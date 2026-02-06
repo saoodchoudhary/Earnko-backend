@@ -13,9 +13,16 @@ function buildAffiliateLink({ originalUrl, affid, affExtParam1, subid }) {
   } catch {
     throw Object.assign(new Error('Invalid URL'), { code: 'bad_request' });
   }
-  const host = u.hostname.toLowerCase();
-  if (!host.includes('flipkart.com')) {
-    throw Object.assign(new Error('Extrape builder only supports flipkart.com'), { code: 'unsupported_domain' });
+
+  const host = u.hostname.toLowerCase().replace(/^www\./, '');
+  const isFlipkart =
+    host === 'flipkart.com' ||
+    host.endsWith('.flipkart.com') ||
+    host === 'dl.flipkart.com' ||
+    host === 'fkrt.it';
+
+  if (!isFlipkart) {
+    throw Object.assign(new Error('Extrape builder only supports Flipkart URLs'), { code: 'unsupported_domain' });
   }
 
   // Append or override required params
