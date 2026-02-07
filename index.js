@@ -58,6 +58,13 @@ app.use('/api/admin/webhooks', require('./routes/admin/webhooks'));
 app.use('/api/admin/settings', require('./routes/admin/settings'));
 app.use("/api/admin/commissions", require("./routes/admin/commissions"));
 app.use('/api/admin/support', require('./routes/admin/support'));
+// Admin banners CRUD
+app.use('/api/admin/banners', require('./routes/admin/banners'));
+
+
+// Public banners (homepage/dashboard carousel)
+app.use('/api/public/banners', require('./routes/public/banners'));
+
 
 // MISSING BEFORE: mount the admin cuelinks router
 app.use('/api/admin/cuelinks', require('./routes/admin/cuelinks'));
@@ -68,6 +75,8 @@ app.use('/api/public/offers', require('./routes/public/offers'));
 // products
 app.use('/api/products', require('./routes/products'));
 app.use('/api/admin/products', require('./routes/admin/products'));
+// NEW: store profit rates (category-wise)
+app.use('/api/stores', require('./routes/storeProfitRates'));
 
 // User-scoped
 app.use('/api/user/profile', require('./routes/user/profile'));
