@@ -5,7 +5,7 @@ const router = express.Router();
 
 /**
  * GET /r/:code
- * Redirect to destination url saved in ShortUrl.
+ * Commission-safe: redirect to internal affiliate redirect pipeline using slug.
  */
 router.get('/:code', async (req, res) => {
   try {
@@ -13,9 +13,17 @@ router.get('/:code', async (req, res) => {
     if (!code) return res.redirect(process.env.FRONTEND_URL || '/');
 
     const row = await ShortUrl.findOne({ code }).lean();
-    if (!row?.url) return res.redirect(process.env.FRONTEND_URL || '/');
+    if (!row) return res.redirect(process.env.FRONTEND_URL || '/');
 
-    return res.redirect(row.url);
+    // NEW preferred path: go via /api/affiliate/redirect/:slug so clickId is created + embedded
+    if (row.slug) {
+      return res.redirect(`/api/affiliate/redirect/${row.slug}`);
+    }
+
+    // legacy fallback
+    if (row.url) return res.redirect(row.url);
+
+    return res.redirect(process.env.FRONTEND_URL || '/');
   } catch {
     return res.redirect(process.env.FRONTEND_URL || '/');
   }
