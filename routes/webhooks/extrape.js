@@ -70,10 +70,9 @@ function normalizePayload(req) {
 
 /**
  * Extrape Postback Handler (NO SECURITY)
- * Endpoint:
- *   /api/webhooks/extrape
+ * Endpoint: /api/webhooks/extrape
  *
- * Expected (recommended) params:
+ * Recommended params:
  *  - subid (affExtParam2)
  *  - order_id
  *  - sale_amount
@@ -107,26 +106,28 @@ router.all('/', async (req, res) => {
     const userId = click.user;
     const storeId = click.store || null;
 
-    // Idempotent by orderId
-    let tx = await Transaction.findOne({ orderId }).exec();
+    // IMPORTANT: avoid collisions across providers by using provider + orderId
+    const provider = 'extrape';
+    const providerOrderId = `${provider}:${orderId}`;
+
+    let tx = await Transaction.findOne({ orderId: providerOrderId }).exec();
 
     if (!tx) {
-      // Create new transaction
       tx = await Transaction.create({
         user: userId,
         store: storeId,
-        orderId,
+        orderId: providerOrderId,
         orderDate: new Date(),
         productAmount: saleAmount,
         commissionAmount: commission,
-        status, // pending|confirmed|cancelled
+        status,
         clickId: subid,
-        trackingData: { source: 'extrape', currency },
+        trackingData: { source: 'extrape', currency, rawOrderId: orderId },
         affiliateData: { provider: 'extrape', subid },
         notes: 'Created via Extrape postback'
       });
 
-      // Pending credit at creation time
+      // Credit on create
       if (commission > 0 && tx.status === 'pending') {
         await User.updateOne(
           { _id: userId },
@@ -141,7 +142,6 @@ router.all('/', async (req, res) => {
         );
       }
 
-      // If Extrape sends direct "confirmed" on first hit, credit directly to confirmed/available
       if (commission > 0 && tx.status === 'confirmed') {
         await User.updateOne(
           { _id: userId },
@@ -156,22 +156,22 @@ router.all('/', async (req, res) => {
         );
       }
     } else {
-      // Update existing transaction and adjust wallet on status transitions
       const prevStatus = String(tx.status || 'pending');
       const prevCommission = parseNumber(tx.commissionAmount, 0);
 
-      // Update transaction
-      tx.productAmount = saleAmount || tx.productAmount;
-      tx.commissionAmount = commission || tx.commissionAmount;
+      // FIX: allow 0 values; don't use "commission || old"
+      if (saleAmount !== undefined && saleAmount !== null) tx.productAmount = saleAmount;
+      if (commission !== undefined && commission !== null) tx.commissionAmount = commission;
+
       tx.clickId = tx.clickId || subid;
       tx.status = status;
-      tx.trackingData = { ...(tx.trackingData || {}), source: 'extrape', currency };
+      tx.trackingData = { ...(tx.trackingData || {}), source: 'extrape', currency, rawOrderId: orderId };
       tx.affiliateData = { ...(tx.affiliateData || {}), provider: 'extrape', subid };
       await tx.save();
 
       const newCommission = parseNumber(tx.commissionAmount, 0);
 
-      // If commission changes while pending->pending, update pending amounts by delta
+      // pending -> pending commission change
       if (prevStatus === 'pending' && tx.status === 'pending' && newCommission !== prevCommission) {
         const delta = newCommission - prevCommission;
         await User.updateOne(
@@ -187,11 +187,9 @@ router.all('/', async (req, res) => {
         );
       }
 
-      // Status transitions
       if (prevStatus !== tx.status) {
         const amt = Math.abs(newCommission);
 
-        // pending -> confirmed
         if (prevStatus === 'pending' && tx.status === 'confirmed' && amt > 0) {
           await User.updateOne(
             { _id: userId },
@@ -206,7 +204,6 @@ router.all('/', async (req, res) => {
           );
         }
 
-        // pending -> cancelled
         if (prevStatus === 'pending' && tx.status === 'cancelled' && amt > 0) {
           await User.updateOne(
             { _id: userId },
@@ -219,7 +216,6 @@ router.all('/', async (req, res) => {
           );
         }
 
-        // confirmed -> cancelled (reversal)
         if (prevStatus === 'confirmed' && tx.status === 'cancelled' && amt > 0) {
           await User.updateOne(
             { _id: userId },
@@ -240,7 +236,6 @@ router.all('/', async (req, res) => {
       transaction: tx._id
     });
 
-    // Return 200 OK so partner doesn't retry excessively
     return res.json({
       success: true,
       data: { orderId, status, transactionId: tx._id }
