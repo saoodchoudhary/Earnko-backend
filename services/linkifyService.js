@@ -3,6 +3,7 @@ const cuelinks = require('./affiliateNetwork/cuelinks');
 const trackier = require('./affiliateNetwork/trackier');
 const extrape = require('./affiliateNetwork/extrape');
 const Click = require('../models/Click');
+const ShortUrl = require('../models/ShortUrl');
 const { normalizeAffiliateInputUrl, toCanonicalUrl, resolveFinalUrl, makeProviderSafeUrl } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
@@ -69,9 +70,58 @@ function getTrackierCampaignId(url) {
   return '';
 }
 
-function buildShareUrl(slug) {
-  const base = (process.env.BACKEND_URL || 'https://api.earnko.com').replace(/\/+$/, '');
-  return `${base}/api/affiliate/redirect/${slug}`;
+function publicSiteBase() {
+  // This should be your WEBSITE domain (earnko.com)
+  // Set PUBLIC_SITE_URL=https://earnko.com in backend env.
+  return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
+}
+
+function buildPublicShortUrl(code) {
+  return `${publicSiteBase()}/${code}`;
+}
+
+async function createShortCodeForSlug({ slug, userId, provider, destinationUrl, clickId }) {
+  // short, URL-safe code
+  let code = shortid.generate().replace(/_/g, '').replace(/-/g, '').slice(0, 8);
+
+  for (let i = 0; i < 6; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await ShortUrl.findOne({ code }).lean();
+    if (!exists) break;
+    code = shortid.generate().replace(/_/g, '').replace(/-/g, '').slice(0, 8);
+  }
+
+  await ShortUrl.create({
+    code,
+    url: destinationUrl, // legacy (kept) - but we will redirect via slug in routes/shortUrl.js
+    clickId: clickId || '',
+    user: userId || null,
+    provider: provider || '',
+    // We will store slug inside url? No. Better: update ShortUrl schema to include slug.
+    // If you haven't changed schema yet, we can temporarily store slug in url as backend redirect:
+    // url: `${(process.env.BACKEND_URL || 'https://api.earnko.com').replace(/\/+$/, '')}/api/affiliate/redirect/${slug}`
+    //
+    // RECOMMENDED: Add slug field in ShortUrl schema. (see below)
+    slug
+  });
+
+  return { code, shortUrl: buildPublicShortUrl(code) };
+}
+
+function backendBase() {
+  return (process.env.BACKEND_URL || 'https://api.earnko.com').replace(/\/+$/, '');
+}
+
+async function buildShareUrl({ slug, userId, provider, destinationUrl, clickId }) {
+  // Generate a short code and return https://earnko.com/<code>
+  const { shortUrl } = await createShortCodeForSlug({
+    slug,
+    userId,
+    provider,
+    destinationUrl,
+    clickId
+  });
+  return shortUrl;
 }
 
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
@@ -138,10 +188,18 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
 
     await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
 
+    const shareUrl = await buildShareUrl({
+      slug,
+      userId: user._id,
+      provider: 'extrape',
+      destinationUrl: `${backendBase()}/api/affiliate/redirect/${slug}`, // best
+      clickId
+    });
+
     return {
       link: deeplink,
       providerLink: deeplink,
-      shareUrl: buildShareUrl(slug),
+      shareUrl,
       method: 'extrape',
       slug,
       clickId
@@ -182,10 +240,18 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
 
     await Click.updateOne({ clickId }, { $set: { affiliateLink: deeplink } });
 
+    const shareUrl = await buildShareUrl({
+      slug,
+      userId: user._id,
+      provider: 'trackier',
+      destinationUrl: `${backendBase()}/api/affiliate/redirect/${slug}`,
+      clickId
+    });
+
     return {
       link: deeplink,
       providerLink: deeplink,
-      shareUrl: buildShareUrl(slug),
+      shareUrl,
       method: 'trackier',
       slug,
       clickId
@@ -225,10 +291,18 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
 
   await Click.updateOne({ clickId }, { $set: { affiliateLink: cuelinksResp.link } });
 
+  const shareUrl = await buildShareUrl({
+    slug,
+    userId: user._id,
+    provider: 'cuelinks',
+    destinationUrl: `${backendBase()}/api/affiliate/redirect/${slug}`,
+    clickId
+  });
+
   return {
     link: cuelinksResp.link,
     providerLink: cuelinksResp.link,
-    shareUrl: buildShareUrl(slug),
+    shareUrl,
     method: 'cuelinks',
     slug,
     clickId
