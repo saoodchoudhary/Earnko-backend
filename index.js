@@ -94,6 +94,7 @@ app.use('/api/admin/category-commissions', require('./routes/admin/category-comm
 app.use('/api/webhooks/cuelinks', require('./routes/webhooks/cuelinks'));
 app.use('/api/webhooks/extrape', require('./routes/webhooks/extrape'));
 app.use('/api/webhooks/trackier', require('./routes/webhooks/trackier'));
+app.use('/api/webhooks/realcash', require('./routes/webhooks/realcash'));
 
 // User analytics
 app.use('/api/user/analytics', require('./routes/user/analytics'));
