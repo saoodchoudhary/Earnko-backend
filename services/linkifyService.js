@@ -37,13 +37,18 @@ function isAjioHost(host) {
     host === 'ajio.com' ||
     host.endsWith('.ajio.com') ||
     host === 'ajioapps.onelink.me' ||
-    host.endsWith('.onelink.me') || // keep broad only if you are sure; else remove
+    host.endsWith('.onelink.me') ||
     host === 'ajio.page.link'
   );
 }
 
 function isTiraHost(host) {
   return host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com');
+}
+
+// NEW: Dot & Key host
+function isDotAndKeyHost(host) {
+  return host === 'dotandkey.com' || host.endsWith('.dotandkey.com');
 }
 
 function pickProvider(url) {
@@ -53,6 +58,9 @@ function pickProvider(url) {
   if (isMyntraHost(host)) return 'trackier';
   if (isAjioHost(host)) return 'trackier';
   if (isTiraHost(host)) return 'trackier';
+
+  // NEW: Dot & Key -> trackier/vcommission
+  if (isDotAndKeyHost(host)) return 'trackier';
 
   return 'cuelinks';
 }
@@ -66,7 +74,9 @@ function getTrackierCampaignId(url) {
   if (isAjioHost(host)) return process.env.TRACKIER_AJIO_CAMPAIGN_ID || '';
   if (isTiraHost(host)) return process.env.TRACKIER_TIRABEAUTY_CAMPAIGN_ID || '';
 
-  // fallback none
+  // NEW: Dot & Key campaign
+  if (isDotAndKeyHost(host)) return process.env.TRACKIER_DOTANDKEY_CAMPAIGN_ID || '';
+
   return '';
 }
 
@@ -81,7 +91,6 @@ function buildPublicShortUrl(code) {
 }
 
 async function createShortCodeForSlug({ slug, userId, provider, destinationUrl, clickId }) {
-  // short, URL-safe code
   let code = shortid.generate().replace(/_/g, '').replace(/-/g, '').slice(0, 8);
 
   for (let i = 0; i < 6; i++) {
@@ -93,15 +102,10 @@ async function createShortCodeForSlug({ slug, userId, provider, destinationUrl, 
 
   await ShortUrl.create({
     code,
-    url: destinationUrl, // legacy (kept) - but we will redirect via slug in routes/shortUrl.js
+    url: destinationUrl,
     clickId: clickId || '',
     user: userId || null,
     provider: provider || '',
-    // We will store slug inside url? No. Better: update ShortUrl schema to include slug.
-    // If you haven't changed schema yet, we can temporarily store slug in url as backend redirect:
-    // url: `${(process.env.BACKEND_URL || 'https://api.earnko.com').replace(/\/+$/, '')}/api/affiliate/redirect/${slug}`
-    //
-    // RECOMMENDED: Add slug field in ShortUrl schema. (see below)
     slug
   });
 
@@ -113,7 +117,6 @@ function backendBase() {
 }
 
 async function buildShareUrl({ slug, userId, provider, destinationUrl, clickId }) {
-  // Generate a short code and return https://earnko.com/<code>
   const { shortUrl } = await createShortCodeForSlug({
     slug,
     userId,
@@ -132,7 +135,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  // AJIO app links: tell user to paste website link
   const inputHost = normalizeHost(cleaned);
   if (isAjioAppHost(inputHost)) {
     const err = new Error('AJIO app links are not supported. Please paste AJIO website product link (ajio.com/...)');
@@ -140,17 +142,13 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  // try resolve short/app links -> final merchant URL (best effort)
   const resolvedRaw = await resolveFinalUrl(cleaned);
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
 
-  // make provider-safe (currently special handling for Myntra)
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
   const provider = pickProvider(providerSafeUrl || resolvedUrl || cleaned);
   const slug = shortid.generate();
-
-  // click id for attribution
   const clickId = shortid.generate();
 
   await Click.create({
@@ -192,24 +190,16 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       slug,
       userId: user._id,
       provider: 'extrape',
-      destinationUrl: `${backendBase()}/api/affiliate/redirect/${slug}`, // best
+      destinationUrl: `${backendBase()}/api/affiliate/redirect/${slug}`,
       clickId
     });
 
-    return {
-      link: deeplink,
-      providerLink: deeplink,
-      shareUrl,
-      method: 'extrape',
-      slug,
-      clickId
-    };
+    return { link: deeplink, providerLink: deeplink, shareUrl, method: 'extrape', slug, clickId };
   }
 
   if (provider === 'trackier') {
     const campaignId = getTrackierCampaignId(providerSafeUrl);
 
-    // Put clickId in p1 so postback can map click_id={p1}
     const adnParams = { p1: clickId, p2: slug };
 
     const { url: deeplink, raw } = await trackier.buildDeeplink({
@@ -248,17 +238,9 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       clickId
     });
 
-    return {
-      link: deeplink,
-      providerLink: deeplink,
-      shareUrl,
-      method: 'trackier',
-      slug,
-      clickId
-    };
+    return { link: deeplink, providerLink: deeplink, shareUrl, method: 'trackier', slug, clickId };
   }
 
-  // cuelinks
   const cuelinksResp = await cuelinks.buildAffiliateLink({ originalUrl: providerSafeUrl, subid: clickId });
   const msg = String(cuelinksResp?.error || '').toLowerCase();
 
@@ -299,14 +281,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     clickId
   });
 
-  return {
-    link: cuelinksResp.link,
-    providerLink: cuelinksResp.link,
-    shareUrl,
-    method: 'cuelinks',
-    slug,
-    clickId
-  };
+  return { link: cuelinksResp.link, providerLink: cuelinksResp.link, shareUrl, method: 'cuelinks', slug, clickId };
 }
 
 module.exports = { createAffiliateLinkStrict };
