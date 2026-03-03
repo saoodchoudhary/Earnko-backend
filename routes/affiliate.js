@@ -1,7 +1,6 @@
 const express = require('express');
 const { auth } = require('../middleware/auth');
 const User = require('../models/User');
-const Store = require('../models/Store');
 const Click = require('../models/Click');
 const { createAffiliateLinkStrict } = require('../services/linkifyService');
 const shortid = require('shortid');
@@ -12,37 +11,98 @@ const { buildDeeplink: buildCuelinksDeeplink } = require('../services/cuelinks')
 
 const router = express.Router();
 
-// UNIVERSAL: Create affiliate link from pasted URL (STRICT)
-// Returns shareUrl (Earnko redirect)
+function normalizeHost(inputUrl) {
+  try {
+    const u = new URL(inputUrl);
+    return u.hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+// ===== RealCash redirect-time wrapper =====
+function isRealCashTrackingHost(host) {
+  return host === 'track.realcash.in' || host.endsWith('.realcash.in');
+}
+function getRealCashBaseForHost(host) {
+  if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
+  if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
+  if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
+  if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
+  if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
+  if (host === 'firstcry.com' || host.endsWith('.firstcry.com')) return process.env.REALCASH_FIRSTCRY_BASE || '';
+  if (host === 'pepperfry.com' || host.endsWith('.pepperfry.com')) return process.env.REALCASH_PEPPERFRY_BASE || '';
+  if (host === 'plumgoodness.com' || host.endsWith('.plumgoodness.com') || host === 'plumgoodness.in' || host.endsWith('.plumgoodness.in')) {
+    return process.env.REALCASH_PLUMGOODNESS_BASE || '';
+  }
+  if (host === 'boat-lifestyle.com' || host.endsWith('.boat-lifestyle.com') || host === 'boatlifestyle.com' || host.endsWith('.boatlifestyle.com')) {
+    return process.env.REALCASH_BOAT_BASE || '';
+  }
+  return '';
+}
+function buildRealCashRedirectLink({ destinationUrl, clickId }) {
+  const host = normalizeHost(destinationUrl);
+  if (isRealCashTrackingHost(host)) return destinationUrl;
+
+  const base = getRealCashBaseForHost(host);
+  if (!base) {
+    // public redirect: if base missing, just go to destination (or you can show error page)
+    return destinationUrl;
+  }
+
+  const u = new URL(base);
+  u.searchParams.set('url', destinationUrl);
+  u.searchParams.set('subid', String(clickId));
+  u.searchParams.set('subid1', String(clickId));
+  return u.toString();
+}
+
+function statusFromCode(code) {
+  if (code === 'campaign_approval_required') return 409;
+  if (code === 'store_not_found_for_url') return 400;
+  if (code === 'store_network_missing') return 400;
+  if (code === 'realcash_missing_base') return 400;
+  if (code === 'bad_request') return 400;
+  return 500;
+}
+
+// Create affiliate link from URL (STRICT)
 router.post('/link-from-url', auth, async (req, res) => {
   try {
     const { url, storeId } = req.body;
-    if (!url) return res.status(400).json({ success: false, message: 'URL required' });
+    if (!url) return res.status(400).json({ success: false, code: 'bad_request', message: 'URL required' });
 
     const user = await User.findById(req.user?._id);
-    if (!user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (!user) return res.status(401).json({ success: false, code: 'unauthorized', message: 'Unauthorized' });
 
-    const result = await createAffiliateLinkStrict({ user, url, storeId });
+    const result = await createAffiliateLinkStrict({ user, url, storeId: storeId || null });
     return res.json({ success: true, data: result });
   } catch (err) {
-    return res.status(500).json({ success: false, code: err.code || 'error', message: err.message || 'Server error' });
+    const code = err?.code || 'error';
+    return res.status(statusFromCode(code)).json({
+      success: false,
+      code,
+      message: err?.message || 'Server error'
+    });
   }
 });
 
-// UNIVERSAL BULK: Create multiple shareUrls (STRICT)
+// BULK
 router.post('/link-from-url/bulk', auth, async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
+    const storeId = req.body?.storeId || null;
+
     const MAX = 25;
     const slice = urls.slice(0, MAX);
 
     const user = await User.findById(req.user?._id);
-    if (!user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (!user) return res.status(401).json({ success: false, code: 'unauthorized', message: 'Unauthorized' });
 
     const results = [];
     for (const inputUrl of slice) {
       try {
-        const data = await createAffiliateLinkStrict({ user, url: inputUrl, storeId: null });
+        const data = await createAffiliateLinkStrict({ user, url: inputUrl, storeId });
         results.push({ inputUrl, success: true, data });
       } catch (err) {
         results.push({ inputUrl, success: false, code: err.code || 'error', message: err.message || 'Failed' });
@@ -51,11 +111,11 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
 
     return res.json({ success: true, data: { results } });
   } catch {
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(500).json({ success: false, code: 'error', message: 'Server error' });
   }
 });
 
-// Redirect by slug — creates ClickId and embeds into provider link
+// Redirect by slug
 router.get('/redirect/:slug', async (req, res) => {
   try {
     const slug = req.params.slug;
@@ -66,7 +126,7 @@ router.get('/redirect/:slug', async (req, res) => {
     const linkInfo = user.affiliateInfo.uniqueLinks.find(l => l.customSlug === slug);
     if (!linkInfo) return res.redirect(process.env.FRONTEND_URL || '/');
 
-    const provider = linkInfo.metadata?.provider || 'cuelinks';
+    const provider = String(linkInfo.metadata?.provider || 'cuelinks').toLowerCase();
     const destinationUrl =
       linkInfo.metadata?.providerSafeUrl ||
       linkInfo.metadata?.resolvedUrl ||
@@ -74,10 +134,8 @@ router.get('/redirect/:slug', async (req, res) => {
 
     if (!destinationUrl) return res.redirect(process.env.FRONTEND_URL || '/');
 
-    // Create click id
     const clickId = shortid.generate();
 
-    // Record click
     await Click.create({
       clickId,
       user: user._id,
@@ -87,51 +145,54 @@ router.get('/redirect/:slug', async (req, res) => {
       referrer: req.get('referer') || null,
       customSlug: slug,
       affiliateLink: null,
-      metadata: { provider, destinationUrl }
+      metadata: { source: 'redirect', provider, destinationUrl }
     });
 
-    // Cookie (optional)
-    const store = linkInfo.store ? await Store.findById(linkInfo.store) : null;
-    const cookieDays = store?.cookieDuration || 30;
-    res.cookie('earnko_clickId', clickId, {
-      maxAge: cookieDays * 24 * 60 * 60 * 1000,
-      httpOnly: true,
-      sameSite: 'Lax'
-    });
+    let finalUrl = destinationUrl;
 
-    // Build provider deeplink with clickId embedded (CRITICAL)
-    let target = destinationUrl;
-
-    if (provider === 'extrape') {
+    if (provider === 'realcash') {
+      finalUrl = buildRealCashRedirectLink({ destinationUrl, clickId });
+    } else if (provider === 'extrape') {
       const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
       const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
-
-      target = extrape.buildAffiliateLink({
+      const { url } = extrape.buildAffiliateLink({
         originalUrl: destinationUrl,
         affid,
         affExtParam1,
         subid: clickId
-      }).url;
+      });
+      finalUrl = url;
     } else if (provider === 'trackier') {
-      const campaignId = linkInfo.metadata?.campaignId || '';
-      const adnParams = { click_id: clickId, p1: clickId, p2: slug };
+      const host = normalizeHost(destinationUrl);
+      let campaignId = '';
 
-      target = (await trackier.buildDeeplink({
+      if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') {
+        campaignId = process.env.TRACKIER_MYNTRA_CAMPAIGN_ID || process.env.TRACKIER_MYNTTRA_CAMPAIGN_ID || '';
+      } else if (host === 'ajio.com' || host.endsWith('.ajio.com')) {
+        campaignId = process.env.TRACKIER_AJIO_CAMPAIGN_ID || '';
+      } else if (host === 'tirabeauty.com' || host.endsWith('.tirabeauty.com')) {
+        campaignId = process.env.TRACKIER_TIRABEAUTY_CAMPAIGN_ID || '';
+      } else if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) {
+        campaignId = process.env.TRACKIER_DOTANDKEY_CAMPAIGN_ID || '';
+      }
+
+      const adnParams = { p1: clickId };
+      const { url } = await trackier.buildDeeplink({
         url: destinationUrl,
         campaignId,
         adnParams,
         encodeURL: false
-      })).url;
+      });
+      finalUrl = url;
     } else {
-      // cuelinks default
-      target = await buildCuelinksDeeplink({ url: destinationUrl, subid: clickId });
+      finalUrl = await buildCuelinksDeeplink({ url: destinationUrl, subid: clickId });
     }
 
-    await Click.updateOne({ clickId }, { $set: { affiliateLink: target } });
+    await Click.updateOne({ clickId }, { $set: { affiliateLink: finalUrl } });
 
-    return res.redirect(target);
+    return res.redirect(finalUrl);
   } catch (err) {
-    console.error('redirect error', err);
+    console.warn('redirect error', err);
     return res.redirect(process.env.FRONTEND_URL || '/');
   }
 });

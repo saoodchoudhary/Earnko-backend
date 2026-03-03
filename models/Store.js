@@ -3,11 +3,12 @@ const mongoose = require('mongoose');
 const storeSchema = new mongoose.Schema({
   name: { type: String, required: true },
 
-  // Updated: added extrape + trackier
+  // Updated: required, removed manual, added realcash
   affiliateNetwork: {
     type: String,
-    enum: [ 'cuelinks', 'extrape', 'trackier', 'manual', 'custom'],
-    default: 'manual'
+    required: true,
+    enum: ['cuelinks', 'extrape', 'trackier', 'realcash', 'custom'],
+    default: 'cuelinks'
   },
 
   commissionRate: { type: Number, default: 0 },
