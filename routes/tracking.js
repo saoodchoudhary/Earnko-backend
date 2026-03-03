@@ -42,6 +42,15 @@ function isDotAndKeyHost(host) {
   return host === 'dotandkey.com' || host.endsWith('.dotandkey.com');
 }
 
+function isFlipkartHost(host) {
+  return (
+    host === 'flipkart.com' ||
+    host.endsWith('.flipkart.com') ||
+    host === 'dl.flipkart.com' ||
+    host === 'fkrt.it'
+  );
+}
+
 function getTrackierCampaignId(url) {
   const host = normalizeHost(url);
 
@@ -59,6 +68,7 @@ function isRealCashTrackingHost(host) {
 function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
+  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || ''; // ✅ ADDED
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
   if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
