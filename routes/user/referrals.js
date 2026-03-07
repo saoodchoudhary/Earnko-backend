@@ -13,8 +13,8 @@ const router = express.Router();
 router.get('/', auth, async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user._id);
-
-    const referralLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${req.user._id}`;
+    
+const referralLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${req.user._id}`;
 
     const referred = await User.find({ referredBy: userId }).select('name email createdAt').lean();
 
