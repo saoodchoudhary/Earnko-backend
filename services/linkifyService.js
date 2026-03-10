@@ -110,7 +110,16 @@ function isFlipkartHost(host) {
     host === 'flipkart.com' ||
     host.endsWith('.flipkart.com') ||
     host === 'dl.flipkart.com' ||
-    host === 'fkrt.it'
+    host === 'fkrt.it' ||
+    // add more known Flipkart short domains to avoid issues with RealCash deeplink generation
+    host === 'fkrt.cc' ||
+    host === 'fktr.in' ||
+    host === 'tinyurl.com' ||
+    host === 'fkrt.to' ||
+    host === 'fpkrt.cc' ||
+    host === 'zngy.in' ||
+    host === 'hyyzo.com' ||
+    host === 'extp.in'
   );
 }
 
