@@ -114,10 +114,24 @@ function isFlipkartHost(host) {
   );
 }
 
+/**
+ * ✅ ADDED: Shopsy host matcher
+ * Shopsy commonly uses shopsy.in
+ */
+function isShopsyHost(host) {
+  return host === 'shopsy.in' || host.endsWith('.shopsy.in');
+}
+
 function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
-  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || ''; // ✅ ADDED
+
+  // ✅ existing
+  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
+
+  // ✅ NEW: Shopsy
+  if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
+
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
   if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';

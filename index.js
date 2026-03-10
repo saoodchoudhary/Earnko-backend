@@ -86,6 +86,7 @@ app.use('/api/user/referrals', require('./routes/user/referrals'));
 app.use('/api/user/links', require('./routes/user/links')); // NEW
 app.use('/api/support', require('./routes/support'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/user/short-urls', require('./routes/user/short-urls')); // ✅ NEW (add this)
 
 
 // Cuelinks
