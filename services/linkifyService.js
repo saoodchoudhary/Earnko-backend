@@ -60,7 +60,6 @@ function publicSiteBase() {
   return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
 }
 function buildPublicShortUrl(code) {
-  // NOTE: if your public route is /r/:code then change to `${publicSiteBase()}/r/${code}`
   return `${publicSiteBase()}/${code}`;
 }
 
@@ -106,35 +105,26 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-/**
- * ✅ UPDATED: Flipkart host matcher expanded with your short domains.
- * This will work IF these domains redirect to Flipkart, OR if store resolver maps them.
- *
- * Limitation: if a domain blocks redirect resolution (403/CAPTCHA), it may not resolve.
- */
 function isFlipkartHost(host) {
   return (
     host === 'flipkart.com' ||
     host.endsWith('.flipkart.com') ||
     host === 'dl.flipkart.com' ||
     host === 'fkrt.it' ||
-
-    // ✅ user requested short domains
-    host === 'fkrt.cc' || host.endsWith('.fkrt.cc') ||
-    host === 'fktr.in' || host.endsWith('.fktr.in') ||
-    host === 'fkrt.to' || host.endsWith('.fkrt.to') ||
-    host === 'fpkrt.cc' || host.endsWith('.fpkrt.cc') ||
-    host === 'zngy.in' || host.endsWith('.zngy.in') ||
-    host === 'extp.in' || host.endsWith('.extp.in') ||
-    host === 'tinyurl.com' || host.endsWith('.tinyurl.com') ||
-
-    // hyyzo.com/dl => host is hyyzo.com (path ignored at host-level)
-    host === 'hyyzo.com' || host.endsWith('.hyyzo.com')
+    host === 'fkrt.cc' ||
+    host === 'fktr.in' ||
+    host === 'tinyurl.com' ||
+    host === 'fkrt.to' ||
+    host === 'fpkrt.cc' ||
+    host === 'zngy.in' ||
+    host === 'hyyzo.com' ||
+    host === 'extp.in'
   );
 }
 
 /**
- * ✅ Shopsy host matcher
+ * ✅ ADDED: Shopsy host matcher
+ * Shopsy commonly uses shopsy.in
  */
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
@@ -144,7 +134,10 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
+  // ✅ existing
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
+
+  // ✅ NEW: Shopsy
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
