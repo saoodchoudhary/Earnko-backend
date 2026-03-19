@@ -33,7 +33,7 @@ app.use(passport.initialize());
 const uploadsDir = path.join(__dirname, 'uploads');
 app.use('/uploads', express.static(uploadsDir));
 
-
+app.use('/api/integrations', require('./routes/integrations.telegram'));
 // Routes
 app.use('/api/auth', require('./routes/auth'));           // existing email/password
 app.use('/api/auth', require('./routes/auth.google'));    // NEW: Google OAuth routes

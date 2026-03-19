@@ -16,7 +16,11 @@ const userSchema = new mongoose.Schema({
   providerId: { type: String, default: '' },
 
   phone: { type: String, default: '' },
-
+telegram: {
+  userId: { type: String, default: '', index: true },
+  username: { type: String, default: '' },
+  connectedAt: { type: Date, default: null }
+},
   payout: {
     upiId: { type: String, default: '' },
     bank: {
