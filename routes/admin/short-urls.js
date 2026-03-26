@@ -3,8 +3,6 @@ const mongoose = require('mongoose');
 const { adminAuth } = require('../../middleware/auth');
 
 const ShortUrl = require('../../models/ShortUrl');
-const Click = require('../../models/Click');
-const Transaction = require('../../models/Transaction');
 
 const router = express.Router();
 
@@ -41,11 +39,6 @@ function parseDateRange(query) {
   return match;
 }
 
-function n(v) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
-}
-
 function publicBase() {
   return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
 }
@@ -56,10 +49,10 @@ function publicBase() {
  * Query:
  *  - range=all|7d|30d|90d (default 30d)
  *  - from,to (ISO) optional override
- *  - sort=new|clicks|earnings (default new)
+ *  - sort=new|clicks|earnings (default new)  ✅ GLOBAL TOP
  *  - page (default 1)
  *  - limit (default 20, max 100)
- *  - q (search by code, slug, user email/name)
+ *  - q (search by code, slug, provider, user email/name)
  *
  * Returns:
  *  items: [{
@@ -85,164 +78,260 @@ router.get('/performance', adminAuth, async (req, res) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
-    const dateMatch = parseDateRange({ ...req.query, range });
+    const dateMatch = parseDateRange({ ...req.query, range }); // applies to clicks + tx
 
-    // 1) fetch ShortUrls (platform-wide)
-    // Search: code/slug/provider OR populated user fields (done in-memory filter after populate)
+    // Base ShortUrl filter (code/slug/provider)
     const baseFilter = {};
     if (q) {
       baseFilter.$or = [
         { code: new RegExp(q, 'i') },
         { slug: new RegExp(q, 'i') },
-        { provider: new RegExp(q, 'i') },
+        { provider: new RegExp(q, 'i') }
       ];
     }
 
-    const total = await ShortUrl.countDocuments(baseFilter);
+    // We also support searching user.name/email:
+    // Do $lookup to users and then apply an OR match on user fields.
+    const userSearch = q ? String(q).trim() : '';
+    const userRegex = userSearch ? new RegExp(userSearch, 'i') : null;
 
-    const shortRows = await ShortUrl.find(baseFilter)
-      .sort({ createdAt: -1 })
-      .skip((pageNum - 1) * limitNum)
-      .limit(limitNum)
-      .populate('user', 'name email')
-      .lean();
-
-    // optional: if q is user email/name, filter after populate
-    let rows = shortRows;
-    if (q) {
-      const qq = String(q).trim().toLowerCase();
-      rows = rows.filter(r => {
-        const u = r.user;
-        const name = String(u?.name || '').toLowerCase();
-        const email = String(u?.email || '').toLowerCase();
-        return (
-          String(r.code || '').toLowerCase().includes(qq) ||
-          String(r.slug || '').toLowerCase().includes(qq) ||
-          String(r.provider || '').toLowerCase().includes(qq) ||
-          name.includes(qq) ||
-          email.includes(qq)
-        );
-      });
-    }
-
-    const slugs = rows.map(r => r.slug).filter(Boolean);
-
-    if (!slugs.length) {
-      return res.json({
-        success: true,
-        data: { items: [], total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum }
-      });
-    }
-
-    // 2) clicks aggregate by slug (Click.customSlug)
-    const clicksAgg = await Click.aggregate([
-      {
-        $match: {
-          customSlug: { $in: slugs },
-          ...(Object.keys(dateMatch).length ? dateMatch : {})
-        }
-      },
-      {
-        $group: {
-          _id: '$customSlug',
-          clicks: { $sum: 1 },
-          clickIds: { $addToSet: '$clickId' }
-        }
-      },
-      { $project: { _id: 0, slug: '$_id', clicks: 1, clickIds: 1 } }
-    ]);
-
-    const clickInfoBySlug = new Map();
-    clicksAgg.forEach(r => {
-      clickInfoBySlug.set(r.slug, {
-        clicks: n(r.clicks),
-        clickIds: Array.isArray(r.clickIds) ? r.clickIds : []
-      });
-    });
-
-    // 3) map clickId -> slug for tx folding
-    const allClickIds = [];
-    const slugByClickId = new Map();
-    clicksAgg.forEach(r => {
-      (r.clickIds || []).forEach(cid => {
-        allClickIds.push(cid);
-        slugByClickId.set(cid, r.slug);
-      });
-    });
-
-    let txAgg = [];
-    if (allClickIds.length) {
-      txAgg = await Transaction.aggregate([
-        {
-          $match: {
-            clickId: { $in: allClickIds },
-            ...(Object.keys(dateMatch).length ? dateMatch : {})
-          }
-        },
-        {
-          $group: {
-            _id: { clickId: '$clickId', status: '$status' },
-            count: { $sum: 1 },
-            commission: { $sum: { $ifNull: ['$commissionAmount', 0] } }
-          }
-        }
-      ]);
-    }
-
-    const perfBySlug = new Map();
-    for (const row of txAgg) {
-      const clickId = row?._id?.clickId;
-      const status = String(row?._id?.status || '').toLowerCase();
-      const slug = clickId ? slugByClickId.get(clickId) : null;
-      if (!slug) continue;
-
-      const cur = perfBySlug.get(slug) || {
-        conversions: 0,
-        commissionTotal: 0,
-        approvedCommission: 0,
-        pendingCommission: 0
-      };
-
-      const cnt = n(row.count);
-      const comm = n(row.commission);
-
-      cur.conversions += cnt;
-      cur.commissionTotal += comm;
-
-      if (status === 'approved' || status === 'confirmed') cur.approvedCommission += comm;
-      if (status === 'pending' || status === 'under_review') cur.pendingCommission += comm;
-
-      perfBySlug.set(slug, cur);
-    }
+    // Sorting key
+    const sortKey =
+      String(sort) === 'clicks' ? { clicks: -1, createdAt: -1 } :
+      String(sort) === 'earnings' ? { commissionTotal: -1, createdAt: -1 } :
+      { createdAt: -1 };
 
     const base = publicBase();
 
-    let items = rows.map(r => {
-      const slug = r.slug || '';
-      const clickInfo = clickInfoBySlug.get(slug) || { clicks: 0 };
-      const perf = perfBySlug.get(slug) || { conversions: 0, commissionTotal: 0, approvedCommission: 0, pendingCommission: 0 };
+    /**
+     * Pipeline explanation:
+     * - ShortUrl -> lookup user
+     * - compute clicks per slug (Click.customSlug) in date range
+     * - compute clickIds per slug in date range
+     * - compute tx metrics for those clickIds in date range
+     * - add fields + sort globally + paginate
+     */
+    const pipeline = [];
 
-      return {
-        code: r.code,
-        shortUrl: `${base}/${r.code}`, // ✅ Option 1
-        slug,
-        provider: r.provider || '',
-        createdAt: r.createdAt,
+    // 1) ShortUrl base filter
+    if (Object.keys(baseFilter).length) pipeline.push({ $match: baseFilter });
 
-        user: r.user ? { _id: r.user._id, name: r.user.name || '', email: r.user.email || '' } : null,
+    // 2) join user
+    pipeline.push(
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'userObj'
+        }
+      },
+      { $unwind: { path: '$userObj', preserveNullAndEmptyArrays: true } }
+    );
 
-        clicks: clickInfo.clicks,
-        conversions: perf.conversions,
-        commissionTotal: Math.round(perf.commissionTotal * 100) / 100,
-        approvedCommission: Math.round(perf.approvedCommission * 100) / 100,
-        pendingCommission: Math.round(perf.pendingCommission * 100) / 100
-      };
+    // 3) user search (optional) - OR with existing q on code/slug/provider already handled above
+    // If q exists, we allow match where (shortUrl fields OR user fields).
+    // Since baseFilter already applied, we need to re-include user matches too.
+    if (userRegex) {
+      // If baseFilter was applied, this would exclude pure user matches.
+      // So instead: rebuild OR in a single $match if q exists.
+      // Easiest: if q exists, DO NOT apply baseFilter earlier; apply combined match here.
+      // We'll handle this by injecting a combined match now and removing earlier match if needed.
+    }
+
+    // Rebuild combined match for q (code/slug/provider/user)
+    if (q) {
+      // Remove earlier $match (if any) and use a combined match here
+      // (Mongo doesn't let us "remove", but we can just not add the earlier match; implemented by moving logic here)
+    }
+
+    // To keep file simple and correct, we’ll build a combined match stage now:
+    // If q exists, match if ANY of:
+    // - code/slug/provider matches
+    // - userObj.name/email matches
+    if (q) {
+      // If we already pushed a baseFilter $match, it might filter too hard.
+      // So: only push baseFilter when q is empty. When q exists, use combined match.
+      // (Hence, we need to fix earlier part:)
+    }
+
+    // --- FIX: rebuild pipeline from scratch correctly ---
+    const pipeline2 = [];
+
+    // always join user first, then combined q match (so user search works)
+    pipeline2.push(
+      { $match: baseFilter && !q ? baseFilter : {} },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user',
+          foreignField: '_id',
+          as: 'userObj'
+        }
+      },
+      { $unwind: { path: '$userObj', preserveNullAndEmptyArrays: true } }
+    );
+
+    if (q) {
+      const rx = new RegExp(String(q), 'i');
+      pipeline2.push({
+        $match: {
+          $or: [
+            { code: rx },
+            { slug: rx },
+            { provider: rx },
+            { 'userObj.name': rx },
+            { 'userObj.email': rx }
+          ]
+        }
+      });
+    }
+
+    // 4) Lookup clicks stats for this slug (clicks count + clickIds list) within date range
+    const clickMatchExpr = [{ $eq: ['$customSlug', '$$slug'] }];
+    if (Object.keys(dateMatch).length) {
+      const c = dateMatch.createdAt || {};
+      if (c.$gte) clickMatchExpr.push({ $gte: ['$createdAt', c.$gte] });
+      if (c.$lte) clickMatchExpr.push({ $lte: ['$createdAt', c.$lte] });
+    }
+
+    pipeline2.push({
+      $lookup: {
+        from: 'clicks',
+        let: { slug: '$slug' },
+        pipeline: [
+          { $match: { $expr: { $and: clickMatchExpr } } },
+          {
+            $group: {
+              _id: '$customSlug',
+              clicks: { $sum: 1 },
+              clickIds: { $addToSet: '$clickId' }
+            }
+          },
+          { $project: { _id: 0, clicks: 1, clickIds: 1 } }
+        ],
+        as: 'clickAgg'
+      }
     });
 
-    // 4) sorting
-    if (String(sort) === 'clicks') items.sort((a, b) => (b.clicks || 0) - (a.clicks || 0));
-    else if (String(sort) === 'earnings') items.sort((a, b) => (b.commissionTotal || 0) - (a.commissionTotal || 0));
-    else items.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    pipeline2.push({
+      $addFields: {
+        clicks: { $ifNull: [{ $arrayElemAt: ['$clickAgg.clicks', 0] }, 0] },
+        clickIds: { $ifNull: [{ $arrayElemAt: ['$clickAgg.clickIds', 0] }, []] }
+      }
+    });
+
+    // 5) Lookup transactions metrics by clickIds within date range
+    const txMatchExpr = [{ $in: ['$clickId', '$$clickIds'] }];
+    if (Object.keys(dateMatch).length) {
+      const t = dateMatch.createdAt || {};
+      if (t.$gte) txMatchExpr.push({ $gte: ['$createdAt', t.$gte] });
+      if (t.$lte) txMatchExpr.push({ $lte: ['$createdAt', t.$lte] });
+    }
+
+    pipeline2.push({
+      $lookup: {
+        from: 'transactions',
+        let: { clickIds: '$clickIds' },
+        pipeline: [
+          { $match: { $expr: { $and: txMatchExpr } } },
+          {
+            $group: {
+              _id: '$status',
+              conversions: { $sum: 1 },
+              commission: { $sum: { $ifNull: ['$commissionAmount', 0] } }
+            }
+          }
+        ],
+        as: 'txByStatus'
+      }
+    });
+
+    // fold status groups into totals
+    pipeline2.push({
+      $addFields: {
+        conversions: {
+          $sum: '$txByStatus.conversions'
+        },
+        commissionTotal: {
+          $sum: '$txByStatus.commission'
+        },
+        approvedCommission: {
+          $sum: {
+            $map: {
+              input: {
+                $filter: {
+                  input: '$txByStatus',
+                  as: 'r',
+                  cond: { $in: ['$$r._id', ['approved', 'confirmed']] }
+                }
+              },
+              as: 'x',
+              in: '$$x.commission'
+            }
+          }
+        },
+        pendingCommission: {
+          $sum: {
+            $map: {
+              input: {
+                $filter: {
+                  input: '$txByStatus',
+                  as: 'r',
+                  cond: { $in: ['$$r._id', ['pending', 'under_review']] }
+                }
+              },
+              as: 'x',
+              in: '$$x.commission'
+            }
+          }
+        }
+      }
+    });
+
+    // 6) Project final shape
+    pipeline2.push({
+      $project: {
+        _id: 0,
+        code: 1,
+        slug: 1,
+        provider: 1,
+        createdAt: 1,
+        user: {
+          _id: '$userObj._id',
+          name: '$userObj.name',
+          email: '$userObj.email'
+        },
+        clicks: 1,
+        conversions: 1,
+        commissionTotal: { $round: ['$commissionTotal', 2] },
+        approvedCommission: { $round: ['$approvedCommission', 2] },
+        pendingCommission: { $round: ['$pendingCommission', 2] }
+      }
+    });
+
+    // 7) Global sort (THIS is the main fix)
+    pipeline2.push({ $sort: sortKey });
+
+    // 8) pagination using $facet so total matches same filters
+    pipeline2.push({
+      $facet: {
+        meta: [{ $count: 'total' }],
+        items: [
+          { $skip: (pageNum - 1) * limitNum },
+          { $limit: limitNum }
+        ]
+      }
+    });
+
+    const [out] = await ShortUrl.aggregate(pipeline2);
+    const total = out?.meta?.[0]?.total || 0;
+    const rows = Array.isArray(out?.items) ? out.items : [];
+
+    const items = rows.map(r => ({
+      ...r,
+      shortUrl: `${base}/${r.code}`
+    }));
 
     return res.json({
       success: true,
