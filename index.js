@@ -64,6 +64,8 @@ app.use('/api/admin/support', require('./routes/admin/support'));
 app.use('/api/admin/banners', require('./routes/admin/banners'));
 
 
+// ✅ ADD THIS
+app.use('/api/admin/short-urls', require('./routes/admin/short-urls'));
 
 // Public banners (homepage/dashboard carousel)
 app.use('/api/public/banners', require('./routes/public/banners'));
