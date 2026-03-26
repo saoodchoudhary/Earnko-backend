@@ -25,7 +25,7 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-// ✅ Shopsy host matcher (needed for redirect-time RealCash wrapping)
+// ✅ ADD: Shopsy host matcher (needed for RealCash tracking)
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -34,7 +34,7 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ NEW: Shopsy (RealCash)
+  // ✅ ADD: Shopsy RealCash base
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -62,7 +62,7 @@ function getRealCashBaseForHost(host) {
 }
 
 function buildRealCashRedirectLink({ destinationUrl, clickId }) {
-  // Canonicalize best-effort (helps some redirects)
+  // ✅ Canonicalize best-effort (helps AJIO/others which redirect weirdly)
   let dest = destinationUrl;
   try {
     dest = new URL(destinationUrl).toString();
