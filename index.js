@@ -46,9 +46,6 @@ app.use('/api/tracking', require('./routes/tracking'));
 app.use('/api/conversions', require('./routes/conversions'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/auth', require('./routes/auth.change-password'));
-
-ting
-
 // ✅ ADD THIS (performance)
 app.use('/api/user/short-urls', require('./routes/user/short-urls-performance'));
 
