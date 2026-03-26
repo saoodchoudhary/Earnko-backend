@@ -48,7 +48,8 @@ router.get('/', auth, async (req, res) => {
 
     const items = rows.map((r) => ({
       code: r.code,
-      shortUrl: `${base}/r/${r.code}`, // ✅ commission-safe short URL
+      // ✅ Option 1 only: https://earnko.com/<code>
+      shortUrl: `${base}/${r.code}`,
       slug: r.slug || '',
       provider: r.provider || '',
       clickId: r.clickId || '',

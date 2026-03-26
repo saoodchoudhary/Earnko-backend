@@ -24,9 +24,23 @@ function normalizeHost(inputUrl) {
 function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
+
+// ✅ ADD: Shopsy host matcher (missing earlier)
+function isShopsyHost(host) {
+  return host === 'shopsy.in' || host.endsWith('.shopsy.in');
+}
+
 function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
+
+  // ✅ ADD: Flipkart family if you want (optional) - not present earlier
+  // (only add if your RealCash has Flipkart base)
+  // if (host === 'flipkart.com' || host.endsWith('.flipkart.com') || host === 'dl.flipkart.com') return process.env.REALCASH_FLIPKART_BASE || '';
+
+  // ✅ ADD: Shopsy base (this is what fixes shopsy tracking)
+  if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
+
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
   if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
@@ -40,18 +54,21 @@ function getRealCashBaseForHost(host) {
   }
   return '';
 }
+
 function buildRealCashRedirectLink({ destinationUrl, clickId }) {
   const host = normalizeHost(destinationUrl);
   if (isRealCashTrackingHost(host)) return destinationUrl;
 
   const base = getRealCashBaseForHost(host);
   if (!base) {
-    // public redirect: if base missing, just go to destination (or you can show error page)
     return destinationUrl;
   }
 
   const u = new URL(base);
+
+  // ✅ IMPORTANT: encode the destination URL safely
   u.searchParams.set('url', destinationUrl);
+
   u.searchParams.set('subid', String(clickId));
   u.searchParams.set('subid1', String(clickId));
   return u.toString();
