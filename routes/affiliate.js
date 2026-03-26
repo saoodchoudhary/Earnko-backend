@@ -25,7 +25,7 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-// ✅ ADD: Shopsy host matcher (missing earlier)
+// ✅ Shopsy host matcher (needed for redirect-time RealCash wrapping)
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -34,11 +34,7 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ ADD: Flipkart family if you want (optional) - not present earlier
-  // (only add if your RealCash has Flipkart base)
-  // if (host === 'flipkart.com' || host.endsWith('.flipkart.com') || host === 'dl.flipkart.com') return process.env.REALCASH_FLIPKART_BASE || '';
-
-  // ✅ ADD: Shopsy base (this is what fixes shopsy tracking)
+  // ✅ NEW: Shopsy (RealCash)
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -46,29 +42,46 @@ function getRealCashBaseForHost(host) {
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
   if (host === 'firstcry.com' || host.endsWith('.firstcry.com')) return process.env.REALCASH_FIRSTCRY_BASE || '';
   if (host === 'pepperfry.com' || host.endsWith('.pepperfry.com')) return process.env.REALCASH_PEPPERFRY_BASE || '';
-  if (host === 'plumgoodness.com' || host.endsWith('.plumgoodness.com') || host === 'plumgoodness.in' || host.endsWith('.plumgoodness.in')) {
+  if (
+    host === 'plumgoodness.com' ||
+    host.endsWith('.plumgoodness.com') ||
+    host === 'plumgoodness.in' ||
+    host.endsWith('.plumgoodness.in')
+  ) {
     return process.env.REALCASH_PLUMGOODNESS_BASE || '';
   }
-  if (host === 'boat-lifestyle.com' || host.endsWith('.boat-lifestyle.com') || host === 'boatlifestyle.com' || host.endsWith('.boatlifestyle.com')) {
+  if (
+    host === 'boat-lifestyle.com' ||
+    host.endsWith('.boat-lifestyle.com') ||
+    host === 'boatlifestyle.com' ||
+    host.endsWith('.boatlifestyle.com')
+  ) {
     return process.env.REALCASH_BOAT_BASE || '';
   }
   return '';
 }
 
 function buildRealCashRedirectLink({ destinationUrl, clickId }) {
-  const host = normalizeHost(destinationUrl);
-  if (isRealCashTrackingHost(host)) return destinationUrl;
+  // Canonicalize best-effort (helps some redirects)
+  let dest = destinationUrl;
+  try {
+    dest = new URL(destinationUrl).toString();
+  } catch {
+    // keep as-is
+  }
+
+  const host = normalizeHost(dest);
+  if (isRealCashTrackingHost(host)) return dest;
 
   const base = getRealCashBaseForHost(host);
   if (!base) {
-    return destinationUrl;
+    // If base missing, fallback to destination (no tracking possible)
+    return dest;
   }
 
   const u = new URL(base);
-
-  // ✅ IMPORTANT: encode the destination URL safely
-  u.searchParams.set('url', destinationUrl);
-
+  // URLSearchParams will encode it correctly
+  u.searchParams.set('url', dest);
   u.searchParams.set('subid', String(clickId));
   u.searchParams.set('subid1', String(clickId));
   return u.toString();
