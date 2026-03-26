@@ -47,6 +47,11 @@ app.use('/api/conversions', require('./routes/conversions'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/auth', require('./routes/auth.change-password'));
 
+ting
+
+// ✅ ADD THIS (performance)
+app.use('/api/user/short-urls', require('./routes/user/short-urls-performance'));
+
 // Admin...
 app.use('/api/admin/transactions', require('./routes/admin/transactions'));
 app.use('/api/admin/users', require('./routes/admin/users'));
