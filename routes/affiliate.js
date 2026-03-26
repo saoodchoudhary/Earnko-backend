@@ -25,7 +25,7 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-// ✅ ADD: Shopsy host matcher (needed for RealCash tracking)
+// ✅ ADD: Shopsy host matcher (needed for redirect-time RealCash wrapping)
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -34,7 +34,7 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ ADD: Shopsy RealCash base
+  // ✅ NEW: Shopsy (RealCash)
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -62,7 +62,7 @@ function getRealCashBaseForHost(host) {
 }
 
 function buildRealCashRedirectLink({ destinationUrl, clickId }) {
-  // ✅ Canonicalize best-effort (helps AJIO/others which redirect weirdly)
+  // Canonicalize best-effort (helps some redirects)
   let dest = destinationUrl;
   try {
     dest = new URL(destinationUrl).toString();
@@ -75,12 +75,11 @@ function buildRealCashRedirectLink({ destinationUrl, clickId }) {
 
   const base = getRealCashBaseForHost(host);
   if (!base) {
-    // If base missing, fallback to destination (no tracking possible)
+    // public redirect: if base missing, just go to destination (or you can show error page)
     return dest;
   }
 
   const u = new URL(base);
-  // URLSearchParams will encode it correctly
   u.searchParams.set('url', dest);
   u.searchParams.set('subid', String(clickId));
   u.searchParams.set('subid1', String(clickId));
