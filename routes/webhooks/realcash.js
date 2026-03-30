@@ -25,13 +25,14 @@ function normalizePayload(req) {
     ...(typeof req.body === 'object' && req.body ? req.body : {})
   };
 
-  const clickId =
-    payload.click_id ||
-    payload.clickid ||
-    payload.subid ||
-    payload.sub_id ||
-    payload.subid1 ||
-    payload.subid2 ||
+  const subid = payload.subid ?? payload.sub_id ?? null;
+  const subid1 = payload.subid1 ?? null;
+  const subid2 = payload.subid2 ?? null;
+
+  const click_id =
+    payload.click_id ??
+    payload.clickid ??
+    payload.clickId ??
     null;
 
   const orderId =
@@ -48,9 +49,13 @@ function normalizePayload(req) {
   const status = normStatus(payload.status || payload.conversion_status || payload.state);
   const currency = String(payload.order_currency || payload.currency || 'INR');
 
+  // Prefer Earnko ids first: subid/subid1. Provider click_id is fallback.
+  const clickIdCandidates = [subid, subid1, click_id].filter(Boolean).map(String);
+
   return {
     payload,
-    clickId: clickId ? String(clickId) : null,
+    clickIdCandidates,
+    slugCandidate: subid2 ? String(subid2) : null,
     orderId: orderId ? String(orderId) : null,
     saleAmount,
     commission,
@@ -59,8 +64,33 @@ function normalizePayload(req) {
   };
 }
 
+async function findClickByCandidates(clickIdCandidates) {
+  for (const cid of clickIdCandidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const click = await Click.findOne({ clickId: cid }).lean();
+    if (click) return { click, matchedClickId: cid, matchedBy: 'clickId' };
+  }
+  return { click: null, matchedClickId: null, matchedBy: null };
+}
+
+async function findClickBySlug(slug) {
+  if (!slug) return { click: null, matchedBy: null };
+
+  // 1) direct Click customSlug match (redirect route stores customSlug)
+  const click = await Click.findOne({ customSlug: slug }).sort({ createdAt: -1 }).lean();
+  if (click) return { click, matchedBy: 'customSlug' };
+
+  // 2) fallback: find user by slug stored in uniqueLinks (older data model)
+  const user = await User.findOne({ 'affiliateInfo.uniqueLinks.customSlug': slug }).select('_id').lean();
+  if (!user?._id) return { click: null, matchedBy: null };
+
+  // if user found but click not found, we still cannot attribute safely without clickId
+  return { click: null, matchedBy: 'userSlugButNoClick' };
+}
+
 router.all('/', async (req, res) => {
-  const { payload, clickId, orderId, saleAmount, commission, status, currency } = normalizePayload(req);
+  const { payload, clickIdCandidates, slugCandidate, orderId, saleAmount, commission, status, currency } =
+    normalizePayload(req);
 
   const event = await WebhookEvent.create({
     source: 'realcash',
@@ -71,14 +101,35 @@ router.all('/', async (req, res) => {
   });
 
   try {
-    if (!clickId || !orderId) {
-      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing click_id/subid or order_id/transaction_id' });
-      return res.status(400).json({ success: false, message: 'Missing click_id and order_id' });
+    if (!orderId) {
+      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing order_id/transaction_id' });
+      return res.status(400).json({ success: false, message: 'Missing order_id' });
     }
 
-    const click = await Click.findOne({ clickId }).lean();
+    let click = null;
+    let matchedClickId = null;
+    let matchedBy = null;
+
+    // 1) try clickId candidates first
+    if (clickIdCandidates.length) {
+      const r = await findClickByCandidates(clickIdCandidates);
+      click = r.click;
+      matchedClickId = r.matchedClickId;
+      matchedBy = r.matchedBy;
+    }
+
+    // 2) fallback to slug (subid2) if click not found
+    if (!click && slugCandidate) {
+      const r2 = await findClickBySlug(slugCandidate);
+      click = r2.click;
+      matchedBy = r2.matchedBy;
+    }
+
     if (!click || !click.user) {
-      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Unknown click_id (click not found)' });
+      await WebhookEvent.findByIdAndUpdate(event._id, {
+        status: 'error',
+        error: `Unknown click. clickIdCandidates=${clickIdCandidates.join(',') || '(none)'} slugCandidate=${slugCandidate || '(none)'} matchedBy=${matchedBy || '(none)'}`
+      });
       return res.status(404).json({ success: false, message: 'Unknown click_id' });
     }
 
@@ -97,9 +148,15 @@ router.all('/', async (req, res) => {
         productAmount: saleAmount,
         commissionAmount: commission,
         status,
-        clickId,
+        clickId: matchedClickId || click.clickId || null,
         trackingData: { source: 'realcash', currency, rawOrderId: orderId },
-        affiliateData: { provider: 'realcash', clickId },
+        affiliateData: {
+          provider: 'realcash',
+          matchedClickId: matchedClickId || null,
+          clickIdCandidates,
+          slugCandidate: slugCandidate || null,
+          matchedBy: matchedBy || null
+        },
         notes: 'Created via RealCash postback'
       });
 
@@ -138,9 +195,16 @@ router.all('/', async (req, res) => {
       if (commission !== undefined && commission !== null) tx.commissionAmount = commission;
 
       tx.status = status;
-      tx.clickId = tx.clickId || clickId;
+      tx.clickId = tx.clickId || matchedClickId || click.clickId || null;
       tx.trackingData = { ...(tx.trackingData || {}), source: 'realcash', currency, rawOrderId: orderId };
-      tx.affiliateData = { ...(tx.affiliateData || {}), provider: 'realcash', clickId };
+      tx.affiliateData = {
+        ...(tx.affiliateData || {}),
+        provider: 'realcash',
+        matchedClickId: matchedClickId || null,
+        clickIdCandidates,
+        slugCandidate: slugCandidate || null,
+        matchedBy: matchedBy || null
+      };
       await tx.save();
 
       const newCommission = parseNumber(tx.commissionAmount, 0);
@@ -209,7 +273,10 @@ router.all('/', async (req, res) => {
       transaction: tx._id
     });
 
-    return res.json({ success: true, data: { orderId, status, transactionId: tx._id } });
+    return res.json({
+      success: true,
+      data: { orderId, status, transactionId: tx._id, matchedClickId: matchedClickId || null, matchedBy: matchedBy || null }
+    });
   } catch (err) {
     console.error('RealCash webhook error:', err);
     await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: err.message || 'Server error' });
