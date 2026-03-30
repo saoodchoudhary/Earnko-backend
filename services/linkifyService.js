@@ -60,8 +60,8 @@ function publicSiteBase() {
   return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
 }
 function buildPublicShortUrl(code) {
-  // NOTE: backend only has /r/:code route in index.js, not /:code at root.
-  // If you still want https://earnko.com/<code>, that must be handled by frontend/hosting rewrite.
+  // Option 1: https://earnko.com/<code>
+  // (root rewrite is handled at hosting/frontend level)
   return `${publicSiteBase()}/${code}`;
 }
 
@@ -124,10 +124,6 @@ function isFlipkartHost(host) {
   );
 }
 
-/**
- * ✅ ADDED: Shopsy host matcher
- * Shopsy commonly uses shopsy.in
- */
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -135,13 +131,8 @@ function isShopsyHost(host) {
 function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
-
-  // ✅ existing
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
-
-  // ✅ Shopsy
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
-
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
   if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
@@ -163,7 +154,7 @@ function looksLikeHome(url) {
     if (path === '' || path === '/') return true;
 
     const host = u.hostname.toLowerCase().replace(/^www\./, '');
-    // For big stores, short links often resolve to home/category; treat shallow paths as "not product"
+    // For big stores, short links sometimes resolve to home/category; treat shallow paths as "not product"
     if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
     if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
     if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
@@ -175,7 +166,7 @@ function looksLikeHome(url) {
 }
 
 /**
- * Decide what to pass as "landing page" to RealCash.
+ * Decide what to pass as landing page to RealCash.
  * If resolved/providerSafe becomes homepage-ish, use the original cleaned URL (usually product link).
  */
 function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
@@ -190,9 +181,8 @@ function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
 }
 
 /**
- * ✅ FIXED: RealCash deeplink builder uses configurable landing-page param.
- *
- * Add in .env (try url first, if doesn't work switch to lp):
+ * RealCash deeplink builder uses configurable param names.
+ * Env:
  *   REALCASH_LP_PARAM=url
  *   REALCASH_SUBID_PARAM=subid
  *   REALCASH_SUBID1_PARAM=subid1
