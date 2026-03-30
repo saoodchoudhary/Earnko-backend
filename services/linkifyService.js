@@ -122,10 +122,6 @@ function isFlipkartHost(host) {
   );
 }
 
-/**
- * ✅ ADDED: Shopsy host matcher
- * Shopsy commonly uses shopsy.in
- */
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -134,10 +130,7 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ existing
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
-
-  // ✅ NEW: Shopsy
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -152,6 +145,48 @@ function getRealCashBaseForHost(host) {
     return process.env.REALCASH_BOAT_BASE || '';
   }
   return '';
+}
+
+function isLikelyHomeOrLanding(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    const path = (u.pathname || '/').replace(/\/+$/, '') || '/';
+
+    // “homepage-ish” cases
+    if (path === '' || path === '/') return true;
+
+    // Ajio can land on /shop or /home etc sometimes; treat very short paths as landing
+    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
+
+    // Flipkart: / or /?affid... can be landing
+    if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
+
+    // Shopsy: / or single segment
+    if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
+  const candidate = providerSafeUrl || resolvedUrl || cleaned;
+
+  // If resolution collapsed product URL into homepage/landing, keep original cleaned URL.
+  const candHost = normalizeHost(candidate);
+  const isSensitive =
+    isFlipkartHost(candHost) ||
+    isShopsyHost(candHost) ||
+    candHost === 'ajio.com' ||
+    candHost.endsWith('.ajio.com');
+
+  if (isSensitive && isLikelyHomeOrLanding(candidate)) {
+    return cleaned;
+  }
+
+  return candidate;
 }
 
 function buildRealCashDeeplink({ destinationUrl, clickId, slug }) {
@@ -182,7 +217,6 @@ function normalizeNetwork(net) {
 }
 
 async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cleaned }) {
-  // 1) storeId => always take store's affiliateNetwork
   if (storeId) {
     const store = await Store.findById(storeId).select('affiliateNetwork').lean();
     const net = normalizeNetwork(store?.affiliateNetwork);
@@ -194,7 +228,6 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
     return { provider: net, resolvedStoreId: storeId };
   }
 
-  // 2) No storeId => infer store from URL => must exist in strict mode
   const inferred = await resolveStoreByUrl(providerSafeUrl || resolvedUrl || cleaned);
   if (!inferred?._id) {
     const err = new Error('Store not found for this URL. Please check store baseUrl/trackingUrl mapping.');
@@ -262,8 +295,10 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   });
 
   if (provider === 'realcash') {
+    const realcashDest = pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl });
+
     const deeplink = buildRealCashDeeplink({
-      destinationUrl: providerSafeUrl || resolvedUrl || cleaned,
+      destinationUrl: realcashDest,
       clickId,
       slug
     });
@@ -274,7 +309,15 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       customSlug: slug,
       clicks: 0,
       conversions: 0,
-      metadata: { provider: 'realcash', clickId, originalUrl: cleaned, resolvedUrl, providerSafeUrl, generatedLink: deeplink }
+      metadata: {
+        provider: 'realcash',
+        clickId,
+        originalUrl: cleaned,
+        resolvedUrl,
+        providerSafeUrl,
+        realcashDestinationUrl: realcashDest,
+        generatedLink: deeplink
+      }
     });
     await user.save();
 

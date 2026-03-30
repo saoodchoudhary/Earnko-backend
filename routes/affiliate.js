@@ -25,14 +25,11 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-// ✅ Flipkart host matcher (needed for redirect-time RealCash wrapping)
 function isFlipkartHost(host) {
   return (
     host === 'flipkart.com' ||
     host.endsWith('.flipkart.com') ||
     host === 'dl.flipkart.com' ||
-
-    // common fk short/link domains users paste
     host === 'fkrt.it' ||
     host === 'fkrt.cc' ||
     host === 'fktr.in' ||
@@ -44,7 +41,6 @@ function isFlipkartHost(host) {
   );
 }
 
-// ✅ Shopsy host matcher
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -53,10 +49,7 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ FIX: Flipkart (RealCash)
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
-
-  // ✅ Shopsy (RealCash)
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -83,8 +76,25 @@ function getRealCashBaseForHost(host) {
   return '';
 }
 
-function buildRealCashRedirectLink({ destinationUrl, clickId }) {
-  // Canonicalize best-effort
+function isLikelyHomeOrLanding(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    const path = (u.pathname || '/').replace(/\/+$/, '') || '/';
+
+    if (path === '' || path === '/') return true;
+
+    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
+    if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
+    if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl = null }) {
   let dest = destinationUrl;
   try {
     dest = new URL(destinationUrl).toString();
@@ -92,14 +102,23 @@ function buildRealCashRedirectLink({ destinationUrl, clickId }) {
     // keep as-is
   }
 
+  // If destination looks like homepage/landing, fallback to originalUrl (product url)
+  const host0 = normalizeHost(dest);
+  const sensitive =
+    isFlipkartHost(host0) ||
+    isShopsyHost(host0) ||
+    host0 === 'ajio.com' ||
+    host0.endsWith('.ajio.com');
+
+  if (sensitive && isLikelyHomeOrLanding(dest) && fallbackUrl) {
+    dest = fallbackUrl;
+  }
+
   const host = normalizeHost(dest);
   if (isRealCashTrackingHost(host)) return dest;
 
   const base = getRealCashBaseForHost(host);
-  if (!base) {
-    // If base missing, just go to destination
-    return dest;
-  }
+  if (!base) return dest;
 
   const u = new URL(base);
   u.searchParams.set('url', dest);
@@ -117,7 +136,6 @@ function statusFromCode(code) {
   return 500;
 }
 
-// Create affiliate link from URL (STRICT)
 router.post('/link-from-url', auth, async (req, res) => {
   try {
     const { url, storeId } = req.body;
@@ -138,7 +156,6 @@ router.post('/link-from-url', auth, async (req, res) => {
   }
 });
 
-// BULK
 router.post('/link-from-url/bulk', auth, async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
@@ -167,7 +184,6 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
   }
 });
 
-// Redirect by slug
 router.get('/redirect/:slug', async (req, res) => {
   try {
     const slug = req.params.slug;
@@ -179,6 +195,8 @@ router.get('/redirect/:slug', async (req, res) => {
     if (!linkInfo) return res.redirect(process.env.FRONTEND_URL || '/');
 
     const provider = String(linkInfo.metadata?.provider || 'cuelinks').toLowerCase();
+
+    const originalUrl = linkInfo.metadata?.originalUrl || null;
     const destinationUrl =
       linkInfo.metadata?.providerSafeUrl ||
       linkInfo.metadata?.resolvedUrl ||
@@ -203,7 +221,7 @@ router.get('/redirect/:slug', async (req, res) => {
     let finalUrl = destinationUrl;
 
     if (provider === 'realcash') {
-      finalUrl = buildRealCashRedirectLink({ destinationUrl, clickId });
+      finalUrl = buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl: originalUrl });
     } else if (provider === 'extrape') {
       const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
       const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';
