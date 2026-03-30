@@ -48,45 +48,21 @@ function isShopsyHost(host) {
 function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
-
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
-
-  if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
-  if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
-  if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
-  if (host === 'firstcry.com' || host.endsWith('.firstcry.com')) return process.env.REALCASH_FIRSTCRY_BASE || '';
-  if (host === 'pepperfry.com' || host.endsWith('.pepperfry.com')) return process.env.REALCASH_PEPPERFRY_BASE || '';
-  if (
-    host === 'plumgoodness.com' ||
-    host.endsWith('.plumgoodness.com') ||
-    host === 'plumgoodness.in' ||
-    host.endsWith('.plumgoodness.in')
-  ) {
-    return process.env.REALCASH_PLUMGOODNESS_BASE || '';
-  }
-  if (
-    host === 'boat-lifestyle.com' ||
-    host.endsWith('.boat-lifestyle.com') ||
-    host === 'boatlifestyle.com' ||
-    host.endsWith('.boatlifestyle.com')
-  ) {
-    return process.env.REALCASH_BOAT_BASE || '';
-  }
   return '';
 }
 
-function isLikelyHomeOrLanding(url) {
+function looksLikeHome(url) {
   try {
     const u = new URL(url);
-    const host = u.hostname.toLowerCase().replace(/^www\./, '');
     const path = (u.pathname || '/').replace(/\/+$/, '') || '/';
-
     if (path === '' || path === '/') return true;
 
-    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
     if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
     if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
+    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
 
     return false;
   } catch {
@@ -94,7 +70,7 @@ function isLikelyHomeOrLanding(url) {
   }
 }
 
-function buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl = null }) {
+function buildRealCashRedirectLink({ destinationUrl, clickId, slug, fallbackUrl = null }) {
   let dest = destinationUrl;
   try {
     dest = new URL(destinationUrl).toString();
@@ -102,15 +78,10 @@ function buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl = null
     // keep as-is
   }
 
-  // If destination looks like homepage/landing, fallback to originalUrl (product url)
   const host0 = normalizeHost(dest);
-  const sensitive =
-    isFlipkartHost(host0) ||
-    isShopsyHost(host0) ||
-    host0 === 'ajio.com' ||
-    host0.endsWith('.ajio.com');
+  const sensitive = isFlipkartHost(host0) || isShopsyHost(host0) || host0 === 'ajio.com' || host0.endsWith('.ajio.com');
 
-  if (sensitive && isLikelyHomeOrLanding(dest) && fallbackUrl) {
+  if (sensitive && looksLikeHome(dest) && fallbackUrl) {
     dest = fallbackUrl;
   }
 
@@ -120,10 +91,17 @@ function buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl = null
   const base = getRealCashBaseForHost(host);
   if (!base) return dest;
 
+  const lpParam = String(process.env.REALCASH_LP_PARAM || 'url').trim();
+  const subidParam = String(process.env.REALCASH_SUBID_PARAM || 'subid').trim();
+  const subid1Param = String(process.env.REALCASH_SUBID1_PARAM || 'subid1').trim();
+  const subid2Param = String(process.env.REALCASH_SUBID2_PARAM || 'subid2').trim();
+
   const u = new URL(base);
-  u.searchParams.set('url', dest);
-  u.searchParams.set('subid', String(clickId));
-  u.searchParams.set('subid1', String(clickId));
+  if (lpParam) u.searchParams.set(lpParam, dest);
+  if (subidParam) u.searchParams.set(subidParam, String(clickId));
+  if (subid1Param) u.searchParams.set(subid1Param, String(clickId));
+  if (slug && subid2Param) u.searchParams.set(subid2Param, String(slug));
+
   return u.toString();
 }
 
@@ -136,6 +114,7 @@ function statusFromCode(code) {
   return 500;
 }
 
+// Create affiliate link from URL (STRICT)
 router.post('/link-from-url', auth, async (req, res) => {
   try {
     const { url, storeId } = req.body;
@@ -156,6 +135,7 @@ router.post('/link-from-url', auth, async (req, res) => {
   }
 });
 
+// BULK
 router.post('/link-from-url/bulk', auth, async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
@@ -184,6 +164,7 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
   }
 });
 
+// Redirect by slug
 router.get('/redirect/:slug', async (req, res) => {
   try {
     const slug = req.params.slug;
@@ -195,7 +176,6 @@ router.get('/redirect/:slug', async (req, res) => {
     if (!linkInfo) return res.redirect(process.env.FRONTEND_URL || '/');
 
     const provider = String(linkInfo.metadata?.provider || 'cuelinks').toLowerCase();
-
     const originalUrl = linkInfo.metadata?.originalUrl || null;
     const destinationUrl =
       linkInfo.metadata?.providerSafeUrl ||
@@ -221,7 +201,7 @@ router.get('/redirect/:slug', async (req, res) => {
     let finalUrl = destinationUrl;
 
     if (provider === 'realcash') {
-      finalUrl = buildRealCashRedirectLink({ destinationUrl, clickId, fallbackUrl: originalUrl });
+      finalUrl = buildRealCashRedirectLink({ destinationUrl, clickId, slug, fallbackUrl: originalUrl });
     } else if (provider === 'extrape') {
       const affid = process.env.EXTRAPE_AFFID || 'adminnxtify';
       const affExtParam1 = process.env.EXTRAPE_AFF_EXT_PARAM1 || 'EPTG2738645';

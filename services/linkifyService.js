@@ -60,6 +60,8 @@ function publicSiteBase() {
   return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
 }
 function buildPublicShortUrl(code) {
+  // NOTE: backend only has /r/:code route in index.js, not /:code at root.
+  // If you still want https://earnko.com/<code>, that must be handled by frontend/hosting rewrite.
   return `${publicSiteBase()}/${code}`;
 }
 
@@ -122,6 +124,10 @@ function isFlipkartHost(host) {
   );
 }
 
+/**
+ * ✅ ADDED: Shopsy host matcher
+ * Shopsy commonly uses shopsy.in
+ */
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -130,7 +136,10 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
+  // ✅ existing
   if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
+
+  // ✅ Shopsy
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -147,23 +156,17 @@ function getRealCashBaseForHost(host) {
   return '';
 }
 
-function isLikelyHomeOrLanding(url) {
+function looksLikeHome(url) {
   try {
     const u = new URL(url);
-    const host = u.hostname.toLowerCase().replace(/^www\./, '');
     const path = (u.pathname || '/').replace(/\/+$/, '') || '/';
-
-    // “homepage-ish” cases
     if (path === '' || path === '/') return true;
 
-    // Ajio can land on /shop or /home etc sometimes; treat very short paths as landing
-    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
-
-    // Flipkart: / or /?affid... can be landing
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    // For big stores, short links often resolve to home/category; treat shallow paths as "not product"
     if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
-
-    // Shopsy: / or single segment
     if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
+    if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
 
     return false;
   } catch {
@@ -171,24 +174,30 @@ function isLikelyHomeOrLanding(url) {
   }
 }
 
+/**
+ * Decide what to pass as "landing page" to RealCash.
+ * If resolved/providerSafe becomes homepage-ish, use the original cleaned URL (usually product link).
+ */
 function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
   const candidate = providerSafeUrl || resolvedUrl || cleaned;
+  if (!candidate) return cleaned;
 
-  // If resolution collapsed product URL into homepage/landing, keep original cleaned URL.
-  const candHost = normalizeHost(candidate);
-  const isSensitive =
-    isFlipkartHost(candHost) ||
-    isShopsyHost(candHost) ||
-    candHost === 'ajio.com' ||
-    candHost.endsWith('.ajio.com');
-
-  if (isSensitive && isLikelyHomeOrLanding(candidate)) {
-    return cleaned;
-  }
+  const host = normalizeHost(candidate);
+  const sensitive = isFlipkartHost(host) || isShopsyHost(host) || host === 'ajio.com' || host.endsWith('.ajio.com');
+  if (sensitive && looksLikeHome(candidate)) return cleaned;
 
   return candidate;
 }
 
+/**
+ * ✅ FIXED: RealCash deeplink builder uses configurable landing-page param.
+ *
+ * Add in .env (try url first, if doesn't work switch to lp):
+ *   REALCASH_LP_PARAM=url
+ *   REALCASH_SUBID_PARAM=subid
+ *   REALCASH_SUBID1_PARAM=subid1
+ *   REALCASH_SUBID2_PARAM=subid2
+ */
 function buildRealCashDeeplink({ destinationUrl, clickId, slug }) {
   const dest = toCanonicalUrl(destinationUrl);
   const host = normalizeHost(dest);
@@ -202,11 +211,18 @@ function buildRealCashDeeplink({ destinationUrl, clickId, slug }) {
     throw err;
   }
 
+  const lpParam = String(process.env.REALCASH_LP_PARAM || 'url').trim();
+  const subidParam = String(process.env.REALCASH_SUBID_PARAM || 'subid').trim();
+  const subid1Param = String(process.env.REALCASH_SUBID1_PARAM || 'subid1').trim();
+  const subid2Param = String(process.env.REALCASH_SUBID2_PARAM || 'subid2').trim();
+
   const u = new URL(base);
-  u.searchParams.set('url', dest);
-  u.searchParams.set('subid', String(clickId));
-  u.searchParams.set('subid1', String(clickId));
-  if (slug) u.searchParams.set('subid2', String(slug));
+
+  if (lpParam) u.searchParams.set(lpParam, dest);
+  if (subidParam) u.searchParams.set(subidParam, String(clickId));
+  if (subid1Param) u.searchParams.set(subid1Param, String(clickId));
+  if (slug && subid2Param) u.searchParams.set(subid2Param, String(slug));
+
   return u.toString();
 }
 
@@ -217,6 +233,7 @@ function normalizeNetwork(net) {
 }
 
 async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cleaned }) {
+  // 1) storeId => always take store's affiliateNetwork
   if (storeId) {
     const store = await Store.findById(storeId).select('affiliateNetwork').lean();
     const net = normalizeNetwork(store?.affiliateNetwork);
@@ -228,6 +245,7 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
     return { provider: net, resolvedStoreId: storeId };
   }
 
+  // 2) No storeId => infer store from URL => must exist in strict mode
   const inferred = await resolveStoreByUrl(providerSafeUrl || resolvedUrl || cleaned);
   if (!inferred?._id) {
     const err = new Error('Store not found for this URL. Please check store baseUrl/trackingUrl mapping.');
