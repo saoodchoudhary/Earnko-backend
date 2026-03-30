@@ -39,12 +39,6 @@ function normalizeHost(inputUrl) {
   }
 }
 
-/**
- * Myntra app/share links sometimes contain '&' in the PATH slug.
- * That breaks vcommission's click wrapper.
- *
- * Fix strategy: extract productId and rebuild a safe Myntra URL that always works.
- */
 function normalizeMyntraUrl(inputUrl) {
   try {
     const host = normalizeHost(inputUrl);
@@ -62,11 +56,6 @@ function normalizeMyntraUrl(inputUrl) {
   }
 }
 
-/**
- * Make URL safe to send to Trackier/VCommission:
- * - sanitize/canonicalize
- * - for Myntra, rebuild using productId to avoid '&' in path
- */
 function makeProviderSafeUrl(inputUrl) {
   const base = toCanonicalUrl(sanitizePastedUrl(inputUrl));
   const host = normalizeHost(base);
@@ -89,30 +78,40 @@ function isHttpUrl(url) {
 
 /**
  * Resolve final URL for short/app links (Ajio OneLink, fkrt.it, etc).
- * We use GET with redirect:'follow' to let fetch handle redirect chains.
+ * Try GET first, then fallback to HEAD if GET fails.
  */
-async function resolveFinalUrl(inputUrl, { timeoutMs = 10000 } = {}) {
+async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (compatible; EarnkoBot/1.0; +https://earnko.com)'
+  };
+
   try {
+    // 1) GET (best for providers that only redirect on GET)
     const res = await fetchFn(inputUrl, {
       method: 'GET',
       redirect: 'follow',
       signal: ctrl.signal,
-      headers: {
-        // Some short-link providers behave better with a UA
-        'User-Agent': 'Mozilla/5.0 (compatible; EarnkoBot/1.0; +https://earnko.com)'
-      }
+      headers
     });
-
-    // undici/fetch exposes final url as res.url
-    const finalUrl = res?.url || inputUrl;
-    return finalUrl;
+    return res?.url || inputUrl;
   } catch {
-    return inputUrl;
+    // 2) HEAD fallback (some providers block GET)
+    try {
+      const res2 = await fetchFn(inputUrl, {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: ctrl.signal,
+        headers
+      });
+      return res2?.url || inputUrl;
+    } catch {
+      return inputUrl;
+    }
   } finally {
     clearTimeout(t);
   }

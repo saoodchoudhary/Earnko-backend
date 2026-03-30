@@ -25,7 +25,26 @@ function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
 
-// ✅ ADD: Shopsy host matcher (needed for redirect-time RealCash wrapping)
+// ✅ Flipkart host matcher (needed for redirect-time RealCash wrapping)
+function isFlipkartHost(host) {
+  return (
+    host === 'flipkart.com' ||
+    host.endsWith('.flipkart.com') ||
+    host === 'dl.flipkart.com' ||
+
+    // common fk short/link domains users paste
+    host === 'fkrt.it' ||
+    host === 'fkrt.cc' ||
+    host === 'fktr.in' ||
+    host === 'fkrt.to' ||
+    host === 'fpkrt.cc' ||
+    host === 'zngy.in' ||
+    host === 'hyyzo.com' ||
+    host === 'extp.in'
+  );
+}
+
+// ✅ Shopsy host matcher
 function isShopsyHost(host) {
   return host === 'shopsy.in' || host.endsWith('.shopsy.in');
 }
@@ -34,7 +53,10 @@ function getRealCashBaseForHost(host) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
 
-  // ✅ NEW: Shopsy (RealCash)
+  // ✅ FIX: Flipkart (RealCash)
+  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
+
+  // ✅ Shopsy (RealCash)
   if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
 
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
@@ -62,7 +84,7 @@ function getRealCashBaseForHost(host) {
 }
 
 function buildRealCashRedirectLink({ destinationUrl, clickId }) {
-  // Canonicalize best-effort (helps some redirects)
+  // Canonicalize best-effort
   let dest = destinationUrl;
   try {
     dest = new URL(destinationUrl).toString();
@@ -75,7 +97,7 @@ function buildRealCashRedirectLink({ destinationUrl, clickId }) {
 
   const base = getRealCashBaseForHost(host);
   if (!base) {
-    // public redirect: if base missing, just go to destination (or you can show error page)
+    // If base missing, just go to destination
     return dest;
   }
 
@@ -131,6 +153,7 @@ router.post('/link-from-url/bulk', auth, async (req, res) => {
     const results = [];
     for (const inputUrl of slice) {
       try {
+        // eslint-disable-next-line no-await-in-loop
         const data = await createAffiliateLinkStrict({ user, url: inputUrl, storeId });
         results.push({ inputUrl, success: true, data });
       } catch (err) {
