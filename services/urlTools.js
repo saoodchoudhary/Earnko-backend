@@ -24,10 +24,56 @@ function toCanonicalUrl(inputUrl) {
   }
 }
 
+/**
+ * Fix common pasted URL issues that break merchant deeplinks:
+ * - trailing '?' or '&'
+ * - trailing '#'
+ * - accidental whitespace already removed in sanitizePastedUrl
+ */
+function cleanupTrailingUrlJunk(inputUrl) {
+  if (!inputUrl) return '';
+  let s = String(inputUrl).trim();
+
+  // remove trailing fragments-only markers (rare)
+  while (s.endsWith('#')) s = s.slice(0, -1);
+
+  // remove trailing ? or & (AJIO/others sometimes redirect home if URL malformed)
+  while (s.endsWith('?') || s.endsWith('&')) s = s.slice(0, -1);
+
+  return s;
+}
+
+/**
+ * Canonicalize in a "merchant-safe" way:
+ * - Use URL parser when possible
+ * - Remove trailing '?'/'&'
+ * - Keep querystring (do not remove tracking params)
+ */
+function toMerchantSafeUrl(inputUrl) {
+  const cleaned = cleanupTrailingUrlJunk(inputUrl);
+  if (!cleaned) return '';
+
+  try {
+    const u = new URL(cleaned);
+
+    // Some URLs can end up like "...?"; URL() may keep it as empty search anyway
+    // Normalize it:
+    if (u.search === '?') u.search = '';
+
+    // Also strip trailing junk again post-normalization
+    return cleanupTrailingUrlJunk(u.toString());
+  } catch {
+    // If URL() fails, still return best-effort cleaned
+    return cleanupTrailingUrlJunk(cleaned);
+  }
+}
+
 function normalizeAffiliateInputUrl(input) {
   const cleaned = sanitizePastedUrl(input);
   if (!cleaned) return '';
-  return toCanonicalUrl(cleaned);
+
+  // IMPORTANT: use merchant-safe canonicalization
+  return toMerchantSafeUrl(toCanonicalUrl(cleaned));
 }
 
 function normalizeHost(inputUrl) {
@@ -39,6 +85,12 @@ function normalizeHost(inputUrl) {
   }
 }
 
+/**
+ * Myntra app/share links sometimes contain '&' in the PATH slug.
+ * That breaks vcommission's click wrapper.
+ *
+ * Fix strategy: extract productId and rebuild a safe Myntra URL that always works.
+ */
 function normalizeMyntraUrl(inputUrl) {
   try {
     const host = normalizeHost(inputUrl);
@@ -56,12 +108,18 @@ function normalizeMyntraUrl(inputUrl) {
   }
 }
 
+/**
+ * Make URL safe to send to Trackier/VCommission (and also as merchant landing):
+ * - sanitize/canonicalize
+ * - for Myntra, rebuild using productId to avoid '&' in path
+ * - cleanup trailing '?'/'&'
+ */
 function makeProviderSafeUrl(inputUrl) {
-  const base = toCanonicalUrl(sanitizePastedUrl(inputUrl));
+  const base = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
   const host = normalizeHost(base);
 
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') {
-    return normalizeMyntraUrl(base);
+    return toMerchantSafeUrl(normalizeMyntraUrl(base));
   }
 
   return base;
@@ -98,7 +156,7 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
       signal: ctrl.signal,
       headers
     });
-    return res?.url || inputUrl;
+    return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
   } catch {
     // 2) HEAD fallback (some providers block GET)
     try {
@@ -108,9 +166,9 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
         signal: ctrl.signal,
         headers
       });
-      return res2?.url || inputUrl;
+      return res2?.url ? toMerchantSafeUrl(res2.url) : toMerchantSafeUrl(inputUrl);
     } catch {
-      return inputUrl;
+      return toMerchantSafeUrl(inputUrl);
     }
   } finally {
     clearTimeout(t);
@@ -123,5 +181,9 @@ module.exports = {
   normalizeAffiliateInputUrl,
   normalizeMyntraUrl,
   makeProviderSafeUrl,
-  resolveFinalUrl
+  resolveFinalUrl,
+
+  // exported for reuse/testing if needed
+  toMerchantSafeUrl,
+  cleanupTrailingUrlJunk
 };
