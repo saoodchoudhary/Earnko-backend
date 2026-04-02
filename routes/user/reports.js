@@ -28,18 +28,33 @@ function bestEffortProductTitle(tx) {
     t.title ||
     t.product_name ||
     t.productName ||
-    t.offer_name || // common in some postbacks
-    tx?.notes ||
+    t.offer_name ||
+    t.name ||
     null
   );
 }
 
 function bestEffortProductUrl(tx) {
   const t = tx?.trackingData || {};
-  return t.productUrl || t.url || t.destinationUrl || t.lp || null;
+  return (
+    t.productUrl ||
+    t.url ||
+    t.destinationUrl ||
+    t.lp ||
+    t.landingPage ||
+    tx?.deeplink ||
+    null
+  );
 }
 
-// GET /api/user/reports/orders
+/**
+ * GET /api/user/reports/orders
+ * Query:
+ *   page, limit, storeId, from, to, q
+ * Notes:
+ * - Status bucket filtering (paid/pending/rejected) will be done in frontend to keep it stable
+ * - We DO NOT return affiliateNetwork/provider/raw payload to user (no network leakage)
+ */
 router.get('/orders', auth, async (req, res) => {
   try {
     const userId = req.user?._id;
@@ -48,24 +63,19 @@ router.get('/orders', auth, async (req, res) => {
     }
 
     const {
-      status = '',
       storeId = '',
       from = '',
       to = '',
       q = '',
       page = '1',
-      limit = '20'
+      limit = '10'
     } = req.query;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
 
     const query = { user: new mongoose.Types.ObjectId(userId) };
-
-    // status filter (allow pending/confirmed/cancelled/under_review + also legacy approved/rejected)
-    if (status && status !== 'all') {
-      query.status = String(status);
-    }
 
     if (storeId && mongoose.Types.ObjectId.isValid(storeId)) {
       query.store = new mongoose.Types.ObjectId(storeId);
@@ -79,20 +89,17 @@ router.get('/orders', auth, async (req, res) => {
       if (toD) query.createdAt.$lte = toD;
     }
 
-    // We’ll do best-effort q filtering after fetch (because product title is in trackingData mixed)
-    const skip = (pageNum - 1) * limitNum;
-
-    const [rows, totalRaw] = await Promise.all([
+    const [rows, total] = await Promise.all([
       Transaction.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
-        .populate('store', 'name affiliateNetwork baseUrl trackingUrl')
+        .populate('store', 'name') // ✅ ONLY name (no affiliateNetwork)
         .lean(),
       Transaction.countDocuments(query)
     ]);
 
-    // Build clickId set for source mapping
+    // Build clickId -> slug -> shortcode mapping (optional; does not leak network)
     const clickIds = Array.from(new Set(rows.map(r => r.clickId).filter(Boolean).map(String)));
 
     const clicks = clickIds.length
@@ -135,30 +142,23 @@ router.get('/orders', auth, async (req, res) => {
         orderId: String(tx.orderId || ''),
         orderDate: tx.orderDate || tx.createdAt || null,
 
-        amount: Number(tx.productAmount || 0),
-        commission: Number(tx.commissionAmount || 0),
+        amount: Number(tx.productAmount || tx.amount || 0),
+        cashback: Number(tx.commissionAmount || 0),
 
-        clickId: clickId || null,
-
-        source: {
-          slug: slug || null,
-          shortCode: code || null,
-          shortUrl: code ? buildPublicShortUrl(code) : null
-        },
-
+        // product info for UI
         product: {
           title: bestEffortProductTitle(tx),
           url: bestEffortProductUrl(tx)
         },
 
-        raw: {
-          trackingData: tx.trackingData || null,
-          affiliateData: tx.affiliateData || null
+        // optional earnko short link (safe)
+        share: {
+          shortUrl: code ? buildPublicShortUrl(code) : null
         }
       };
     });
 
-    // Apply q filtering (client search)
+    // best-effort q filtering (orderId/store/title)
     const qStr = String(q || '').trim().toLowerCase();
     if (qStr) {
       items = items.filter(it => {
@@ -169,15 +169,13 @@ router.get('/orders', auth, async (req, res) => {
       });
     }
 
-    // NOTE: totalRaw is total before q filter. If you want total after q, you need another query/aggregation.
-    // For now, keep it simple.
     return res.json({
       success: true,
       data: {
         items,
-        total: totalRaw,
+        total,
         page: pageNum,
-        totalPages: Math.ceil(totalRaw / limitNum)
+        totalPages: Math.max(1, Math.ceil(total / limitNum))
       }
     });
   } catch (err) {
