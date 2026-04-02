@@ -92,6 +92,8 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/user/short-urls', require('./routes/user/short-urls')); // ✅ NEW (add this)
 
+app.use('/api/user/reports', require('./routes/user/reports')); // ✅ ADD THIS
+
 
 // Cuelinks
 app.use('/api/affiliate/cuelinks', require('./routes/affiliate/cuelinks'));
