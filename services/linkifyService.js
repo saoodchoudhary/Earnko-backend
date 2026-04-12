@@ -115,7 +115,6 @@ function isFlipkartHost(host) {
     host === 'fkrt.it' ||
     host === 'fkrt.cc' ||
     host === 'fktr.in' ||
-    host === 'tinyurl.com' ||
     host === 'fkrt.to' ||
     host === 'fpkrt.cc' ||
     host === 'zngy.in' ||
@@ -268,7 +267,11 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  const resolvedRaw = await resolveFinalUrl(cleaned);
+  // Skip URL resolution for Flipkart/Shopsy — they use RealCash/Extrape which
+  // wraps/appends the cleaned URL directly. Resolving short links (fkrt.it etc.)
+  // can take 5–15s and is wasteful for these providers.
+  const skipResolve = !storeId && (isFlipkartHost(inputHost) || isShopsyHost(inputHost));
+  const resolvedRaw = skipResolve ? cleaned : await resolveFinalUrl(cleaned);
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 

@@ -134,44 +134,74 @@ function isHttpUrl(url) {
   }
 }
 
+// Private/internal IP ranges that must not be fetched (SSRF prevention)
+const PRIVATE_IP_RE = /^(127\.|0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|::1$|fc|fd|fe80)/i;
+
+function isSsrfSafeUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === 'localhost' || host === '0.0.0.0') return false;
+    if (PRIVATE_IP_RE.test(host)) return false;
+    // Reject bare IPs that might resolve internally
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && PRIVATE_IP_RE.test(host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resolve final URL for short/app links (Ajio OneLink, fkrt.it, etc).
  * Try GET first, then fallback to HEAD if GET fails.
+ * Each attempt uses its own AbortController so a GET timeout does not
+ * poison the subsequent HEAD attempt.
  */
-async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
+async function resolveFinalUrl(inputUrl, { timeoutMs = 5000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
-
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  if (!isSsrfSafeUrl(inputUrl)) return inputUrl;
 
   const headers = {
     'User-Agent': 'Mozilla/5.0 (compatible; EarnkoBot/1.0; +https://earnko.com)'
   };
 
+  // 1) GET (best for providers that only redirect on GET)
   try {
-    // 1) GET (best for providers that only redirect on GET)
-    const res = await fetchFn(inputUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: ctrl.signal,
-      headers
-    });
-    return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
-  } catch {
-    // 2) HEAD fallback (some providers block GET)
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res2 = await fetchFn(inputUrl, {
-        method: 'HEAD',
+      const res = await fetchFn(inputUrl, {
+        method: 'GET',
         redirect: 'follow',
         signal: ctrl.signal,
         headers
       });
-      return res2?.url ? toMerchantSafeUrl(res2.url) : toMerchantSafeUrl(inputUrl);
+      const resolved = res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
+      // Validate resolved URL is also safe before returning
+      return isSsrfSafeUrl(resolved) ? resolved : toMerchantSafeUrl(inputUrl);
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    // 2) HEAD fallback (some providers block GET) — fresh AbortController
+    try {
+      const ctrl2 = new AbortController();
+      const t2 = setTimeout(() => ctrl2.abort(), timeoutMs);
+      try {
+        const res2 = await fetchFn(inputUrl, {
+          method: 'HEAD',
+          redirect: 'follow',
+          signal: ctrl2.signal,
+          headers
+        });
+        const resolved2 = res2?.url ? toMerchantSafeUrl(res2.url) : toMerchantSafeUrl(inputUrl);
+        return isSsrfSafeUrl(resolved2) ? resolved2 : toMerchantSafeUrl(inputUrl);
+      } finally {
+        clearTimeout(t2);
+      }
     } catch {
       return toMerchantSafeUrl(inputUrl);
     }
-  } finally {
-    clearTimeout(t);
   }
 }
 

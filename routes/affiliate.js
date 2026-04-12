@@ -37,7 +37,6 @@ function isFlipkartHost(host) {
     host === 'fkrt.it' ||
     host === 'fkrt.cc' ||
     host === 'fktr.in' ||
-    host === 'tinyurl.com' ||
     host === 'fkrt.to' ||
     host === 'fpkrt.cc' ||
     host === 'zngy.in' ||

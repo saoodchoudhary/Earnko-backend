@@ -97,7 +97,6 @@ app.use('/api/user/reports', require('./routes/user/reports')); // ✅ ADD THIS
 
 // Cuelinks
 app.use('/api/affiliate/cuelinks', require('./routes/affiliate/cuelinks'));
-app.use('/api/admin/category-commissions', require('./routes/admin/category-commissions'));
 
 app.use('/api/webhooks/cuelinks', require('./routes/webhooks/cuelinks'));
 app.use('/api/webhooks/extrape', require('./routes/webhooks/extrape'));

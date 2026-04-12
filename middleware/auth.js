@@ -8,7 +8,9 @@ async function auth(req, res, next) {
     const token = req.headers.authorization?.replace('Bearer ', '') || req.cookies?.token;
     if (!token) return res.status(401).json({ success:false, message: 'No token' });
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(decoded.userId);
+    // Exclude the large uniqueLinks array to keep every request fast.
+    // Routes that need uniqueLinks must do their own User.findById() fetch.
+    const user = await User.findById(decoded.userId).select('-affiliateInfo.uniqueLinks');
     if (!user) return res.status(401).json({ success:false, message: 'Invalid token' });
     req.user = user;
     next();
