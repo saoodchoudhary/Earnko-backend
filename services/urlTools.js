@@ -3,6 +3,18 @@ if (!fetchFn) {
   try { fetchFn = require('undici').fetch; } catch { throw new Error('No fetch available. Install undici or use Node 18+'); }
 }
 
+// ====== Shortener host list and check util (for fast deeplink optimization) =======
+const SHORTENER_HOSTS = [
+  'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to', 'tinyurl.com', 'zngy.in',
+  'ajioapps.onelink.me', 'ajio.page.link', 'myntr.it', 'hyyzo.com', 'fpkrt.cc', 'extp.in'
+];
+function isShortenerHost(host) {
+  host = (host || '').toLowerCase();
+  return SHORTENER_HOSTS.some(h => host === h || host.endsWith('.' + h));
+}
+
+// ======== URL Sanitization, Canonicalization ==========
+
 function sanitizePastedUrl(input) {
   if (input == null) return '';
   let s = String(input).trim();
@@ -25,45 +37,24 @@ function toCanonicalUrl(inputUrl) {
 }
 
 /**
- * Fix common pasted URL issues that break merchant deeplinks:
- * - trailing '?' or '&'
- * - trailing '#'
- * - accidental whitespace already removed in sanitizePastedUrl
+ * Fix common pasted URL issues that break merchant deeplinks.
  */
 function cleanupTrailingUrlJunk(inputUrl) {
   if (!inputUrl) return '';
   let s = String(inputUrl).trim();
-
-  // remove trailing fragments-only markers (rare)
   while (s.endsWith('#')) s = s.slice(0, -1);
-
-  // remove trailing ? or & (AJIO/others sometimes redirect home if URL malformed)
   while (s.endsWith('?') || s.endsWith('&')) s = s.slice(0, -1);
-
   return s;
 }
 
-/**
- * Canonicalize in a "merchant-safe" way:
- * - Use URL parser when possible
- * - Remove trailing '?'/'&'
- * - Keep querystring (do not remove tracking params)
- */
 function toMerchantSafeUrl(inputUrl) {
   const cleaned = cleanupTrailingUrlJunk(inputUrl);
   if (!cleaned) return '';
-
   try {
     const u = new URL(cleaned);
-
-    // Some URLs can end up like "...?"; URL() may keep it as empty search anyway
-    // Normalize it:
     if (u.search === '?') u.search = '';
-
-    // Also strip trailing junk again post-normalization
     return cleanupTrailingUrlJunk(u.toString());
   } catch {
-    // If URL() fails, still return best-effort cleaned
     return cleanupTrailingUrlJunk(cleaned);
   }
 }
@@ -71,8 +62,6 @@ function toMerchantSafeUrl(inputUrl) {
 function normalizeAffiliateInputUrl(input) {
   const cleaned = sanitizePastedUrl(input);
   if (!cleaned) return '';
-
-  // IMPORTANT: use merchant-safe canonicalization
   return toMerchantSafeUrl(toCanonicalUrl(cleaned));
 }
 
@@ -85,16 +74,13 @@ function normalizeHost(inputUrl) {
   }
 }
 
-/**
- * Myntra app/share links sometimes contain '&' in the PATH slug.
- * That breaks vcommission's click wrapper.
- *
- * Fix strategy: extract productId and rebuild a safe Myntra URL that always works.
- */
+// ======= Platform-specific normalization: Myntra Example =========
+
 function normalizeMyntraUrl(inputUrl) {
   try {
     const host = normalizeHost(inputUrl);
-    if (!(host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it')) return inputUrl;
+    if (!(host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it'))
+      return inputUrl;
 
     const u = new URL(inputUrl);
     const path = u.pathname || '';
@@ -108,20 +94,17 @@ function normalizeMyntraUrl(inputUrl) {
   }
 }
 
-/**
- * Make URL safe to send to Trackier/VCommission (and also as merchant landing):
- * - sanitize/canonicalize
- * - for Myntra, rebuild using productId to avoid '&' in path
- * - cleanup trailing '?'/'&'
- */
 function makeProviderSafeUrl(inputUrl) {
   const base = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
   const host = normalizeHost(base);
 
-  if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') {
+  if (
+    host === 'myntra.com' ||
+    host.endsWith('.myntra.com') ||
+    host === 'myntr.it'
+  ) {
     return toMerchantSafeUrl(normalizeMyntraUrl(base));
   }
-
   return base;
 }
 
@@ -134,22 +117,29 @@ function isHttpUrl(url) {
   }
 }
 
+// ==================== ULTRA-FAST FINAL URL RESOLVER =====================
+
 /**
- * Resolve final URL for short/app links (Ajio OneLink, fkrt.it, etc).
- * Try GET first, then fallback to HEAD if GET fails.
+ * - Non-shortener hosts (like www.flipkart.com): returns canonical, cleaned, instantly, no network.
+ * - Shortener/app hosts (like fkrt.it, ajio.page.link, etc): tries to resolve via GET then HEAD, timeout 2s max.
+ * - On resolve error/timeout, falls back to canonical URL instantly, never hangs.
  */
-async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
+async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
+  let host = '';
+  try { host = new URL(inputUrl).hostname.toLowerCase().replace(/^www\./, ''); } catch {}
+  // Direct merchant/product url: return instantly
+  if (!isShortenerHost(host)) return toMerchantSafeUrl(inputUrl);
 
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
   const headers = {
     'User-Agent': 'Mozilla/5.0 (compatible; EarnkoBot/1.0; +https://earnko.com)'
   };
 
   try {
-    // 1) GET (best for providers that only redirect on GET)
+    // Try GET
     const res = await fetchFn(inputUrl, {
       method: 'GET',
       redirect: 'follow',
@@ -158,7 +148,7 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
     });
     return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
   } catch {
-    // 2) HEAD fallback (some providers block GET)
+    // Try HEAD fallback
     try {
       const res2 = await fetchFn(inputUrl, {
         method: 'HEAD',
@@ -171,7 +161,7 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 15000 } = {}) {
       return toMerchantSafeUrl(inputUrl);
     }
   } finally {
-    clearTimeout(t);
+    clearTimeout(timer);
   }
 }
 
@@ -182,8 +172,8 @@ module.exports = {
   normalizeMyntraUrl,
   makeProviderSafeUrl,
   resolveFinalUrl,
-
-  // exported for reuse/testing if needed
+  // for custom logic/testing
   toMerchantSafeUrl,
-  cleanupTrailingUrlJunk
+  cleanupTrailingUrlJunk,
+  isShortenerHost
 };
