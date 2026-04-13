@@ -217,7 +217,7 @@ ${url}
 If it says "Please login", then login to Earnko and open the same link again.
 Once you see "Connected!", come back here and paste product URLs.
 
-Login Link: ${url}/login
+Login Link: ${frontendBase()}/login
 `
     );
   });
