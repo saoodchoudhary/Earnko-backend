@@ -10,22 +10,16 @@ const router = express.Router();
  * POST /api/integrations/telegram/connect
  * body: { telegramUserId }
  *
- * Frontend page: /telegram/connect already calls this with Bearer token from localStorage. citeturn9search0
+ * Used by frontend page: /telegram/connect?tgId=...
  */
 router.post('/telegram/connect', auth, async (req, res) => {
   try {
     const telegramUserId = String(req.body?.telegramUserId || '').trim();
     if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
 
-    // Save mapping on the logged-in user
     await User.updateOne(
       { _id: req.user._id },
-      {
-        $set: {
-          'telegram.userId': telegramUserId,
-          'telegram.connectedAt': new Date()
-        }
-      }
+      { $set: { 'telegram.userId': telegramUserId, 'telegram.connectedAt': new Date() } }
     );
 
     return res.json({ success: true, message: 'Connected' });
@@ -35,15 +29,30 @@ router.post('/telegram/connect', auth, async (req, res) => {
   }
 });
 
+function safeUrlList(urls) {
+  const list = Array.isArray(urls) ? urls : [];
+  return list
+    .map(u => String(u || '').trim())
+    .filter(Boolean)
+    .filter(u => {
+      try { new URL(u); return true; } catch { return false; }
+    });
+}
+
+function mapErrorToStatus(err) {
+  const code = err?.code || '';
+  if (code === 'bad_request') return 400;
+  if (code === 'store_not_found_for_url') return 400;
+  if (code === 'store_network_missing') return 400;
+  if (code === 'realcash_missing_base') return 400;
+  if (code === 'ajio_app_link_not_supported') return 400;
+  return 500;
+}
+
 /**
  * POST /api/integrations/telegram/link-from-url
  * body: { telegramUserId, url, storeId? }
- *
- * This is the key fix:
- * - Bot sends telegramUserId + url
- * - Backend finds linked user
- * - Runs the same link generation as website (createAffiliateLinkStrict)
- * - Returns only shareUrl (short link)
+ * returns: { shareUrl, slug }
  */
 router.post('/telegram/link-from-url', async (req, res) => {
   try {
@@ -54,39 +63,80 @@ router.post('/telegram/link-from-url', async (req, res) => {
     if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
     if (!url) return res.status(400).json({ success: false, message: 'url required' });
 
-    // find user linked to this telegram id
+    if (storeId && !mongoose.Types.ObjectId.isValid(storeId)) {
+      return res.status(400).json({ success: false, message: 'Invalid storeId' });
+    }
+
     const user = await User.findOne({ 'telegram.userId': telegramUserId });
     if (!user) {
       return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
     }
 
-    // validate storeId if provided
+    const result = await createAffiliateLinkStrict({ user, url, storeId: storeId || null });
+
+    return res.json({
+      success: true,
+      data: { shareUrl: result.shareUrl, slug: result.slug }
+    });
+  } catch (err) {
+    console.error('telegram link-from-url error', err);
+    return res.status(mapErrorToStatus(err)).json({ success: false, message: err?.message || 'Server error' });
+  }
+});
+
+/**
+ * POST /api/integrations/telegram/link-from-url/bulk
+ * body: { telegramUserId, urls: [ ... ], storeId? }
+ *
+ * returns:
+ * { results: [{ inputUrl, success, shareUrl?, slug?, message? }] }
+ */
+router.post('/telegram/link-from-url/bulk', async (req, res) => {
+  try {
+    const telegramUserId = String(req.body?.telegramUserId || '').trim();
+    const storeId = req.body?.storeId || null;
+
+    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
     if (storeId && !mongoose.Types.ObjectId.isValid(storeId)) {
       return res.status(400).json({ success: false, message: 'Invalid storeId' });
     }
 
-    const result = await createAffiliateLinkStrict({ user, url, storeId: storeId || null });
+    const urls = safeUrlList(req.body?.urls);
+    if (!urls.length) return res.status(400).json({ success: false, message: 'urls array required' });
 
-    // Return only short link for Telegram
-    return res.json({
-      success: true,
-      data: {
-        shareUrl: result.shareUrl,
-        slug: result.slug
+    const MAX = 25;
+    const slice = urls.slice(0, MAX);
+
+    const user = await User.findOne({ 'telegram.userId': telegramUserId });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
+    }
+
+    // Sequential to avoid provider rate limits; can be parallel later if needed
+    const results = [];
+    for (const inputUrl of slice) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const out = await createAffiliateLinkStrict({ user, url: inputUrl, storeId: storeId || null });
+        results.push({
+          inputUrl,
+          success: true,
+          shareUrl: out.shareUrl,
+          slug: out.slug
+        });
+      } catch (err) {
+        results.push({
+          inputUrl,
+          success: false,
+          message: err?.message || 'Failed'
+        });
       }
-    });
+    }
+
+    return res.json({ success: true, data: { results } });
   } catch (err) {
-    console.error('telegram link-from-url error', err);
-    const code = err?.code || '';
-    const msg = err?.message || 'Server error';
-
-    // Keep consistent client-facing statuses
-    if (code === 'bad_request') return res.status(400).json({ success: false, message: msg });
-    if (code === 'store_not_found_for_url') return res.status(400).json({ success: false, message: msg });
-    if (code === 'store_network_missing') return res.status(400).json({ success: false, message: msg });
-    if (code === 'realcash_missing_base') return res.status(400).json({ success: false, message: msg });
-
-    return res.status(500).json({ success: false, message: msg });
+    console.error('telegram bulk link-from-url error', err);
+    return res.status(500).json({ success: false, message: err?.message || 'Server error' });
   }
 });
 

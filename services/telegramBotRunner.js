@@ -1,5 +1,4 @@
 require('dotenv').config();
-
 const TelegramBot = require('node-telegram-bot-api');
 
 let fetchFn = globalThis.fetch;
@@ -7,7 +6,7 @@ if (!fetchFn) {
   try { fetchFn = require('undici').fetch; } catch { throw new Error('No fetch available. Use Node 18+ or install undici'); }
 }
 
-// singleton to avoid double handlers
+// singleton to avoid double start
 if (global.__EARNKO_TELEGRAM_BOT_SINGLETON__ == null) {
   global.__EARNKO_TELEGRAM_BOT_SINGLETON__ = { started: false };
 }
@@ -16,21 +15,28 @@ function safeBase(u, fallback) {
   const s = String(u || fallback || '').trim();
   return s.replace(/\/+$/, '');
 }
-
 function frontendBase() {
   return safeBase(process.env.FRONTEND_URL, 'http://localhost:3000');
 }
-
 function backendPublicBase() {
-  // IMPORTANT: must be your public API domain in production, not localhost.
-  // Example: https://api.earnko.com
   return safeBase(process.env.BACKEND_URL || process.env.BACKEND_API, `http://localhost:${process.env.PORT || 8080}`);
 }
 
-function extractUrl(text) {
-  if (!text) return null;
-  const match = String(text).match(/https?:\/\/[^\s]+/i);
-  return match ? match[0] : null;
+// Extract ALL URLs (not just first)
+function extractAllUrls(text) {
+  if (!text) return [];
+  const matches = String(text).match(/https?:\/\/[^\s]+/gi) || [];
+  // dedupe + keep order
+  const out = [];
+  const seen = new Set();
+  for (const u of matches) {
+    const url = String(u).trim();
+    if (!url) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
 }
 
 function buildHelpText() {
@@ -40,14 +46,13 @@ function buildHelpText() {
 • /connect
 (Open the link, login to Earnko if needed, then it will connect automatically.)
 
-2) Generate a short link:
-• Paste any product URL (Flipkart/Myntra/Ajio etc.)
-• Bot will reply with a short share link.
+2) Generate short links:
+• Paste 1 link OR multiple product URLs in one message.
+• Bot will reply with short share links for all.
 
 Commands:
 • /start   - Getting started
 • /connect - Connect Telegram with Earnko
-• /logout  - Disconnect
 • /help    - Help`;
 }
 
@@ -58,16 +63,26 @@ async function generateTelegramShortLink({ telegramUserId, url }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ telegramUserId, url })
   });
-
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.success) {
-    return { ok: false, message: data?.message || `Request failed (${res.status})` };
-  }
+  if (!res.ok || !data?.success) return { ok: false, message: data?.message || `Request failed (${res.status})` };
 
   const short = data?.data?.shareUrl;
   if (!short) return { ok: false, message: 'shareUrl not returned by backend' };
-
   return { ok: true, short };
+}
+
+async function generateTelegramShortLinksBulk({ telegramUserId, urls }) {
+  const base = backendPublicBase();
+  const res = await fetchFn(`${base}/api/integrations/telegram/link-from-url/bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegramUserId, urls })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.success) return { ok: false, message: data?.message || `Request failed (${res.status})` };
+
+  const results = data?.data?.results || [];
+  return { ok: true, results };
 }
 
 function startTelegramBot() {
@@ -80,7 +95,6 @@ function startTelegramBot() {
   }
 
   global.__EARNKO_TELEGRAM_BOT_SINGLETON__.started = true;
-
   const bot = new TelegramBot(token, { polling: true });
 
   bot.on('polling_error', (err) => {
@@ -98,8 +112,8 @@ Step 1: Connect your Earnko account
 • After connection, come back to Telegram.
 
 Step 2: Generate short links
-• Paste any product URL (Flipkart/Myntra/Ajio etc.)
-• I will generate a short share link for you.
+• Paste 1 or multiple product URLs in a single message
+• I will generate short share links for all URLs.
 
 Type /help to see all commands.`
     );
@@ -120,26 +134,64 @@ Type /help to see all commands.`
 ${url}
 
 If it says "Please login", then login to Earnko and open the same link again.
-Once you see "Connected!", come back here and paste a product URL.`
+Once you see "Connected!", come back here and paste product URLs.`
     );
-  });
-
-  bot.onText(/\/logout/, (msg) => {
-    // We are not unlinking DB here (optional). If you want unlink, do it via a backend endpoint.
-    bot.sendMessage(msg.chat.id, 'To disconnect, please reconnect from /connect anytime. (Logout is optional)');
   });
 
   bot.on('message', async (msg) => {
     const text = msg.text || msg.caption || '';
     if (String(text).startsWith('/')) return;
 
-    const url = extractUrl(text);
-    if (!url) return;
+    const urls = extractAllUrls(text);
+    if (!urls.length) return;
 
     const telegramUserId = String(msg.from?.id || '');
 
+    // If multiple URLs -> bulk
+    if (urls.length > 1) {
+      bot.sendMessage(msg.chat.id, `Generating ${Math.min(urls.length, 25)} short links...`);
+
+      const r = await generateTelegramShortLinksBulk({ telegramUserId, urls: urls.slice(0, 25) });
+      if (!r.ok) {
+        bot.sendMessage(msg.chat.id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
+        return;
+      }
+
+      const results = Array.isArray(r.results) ? r.results : [];
+      if (!results.length) {
+        bot.sendMessage(msg.chat.id, 'No results returned.');
+        return;
+      }
+
+      // Build a readable list
+      const lines = results.map((it, idx) => {
+        if (it?.success) return `${idx + 1}) ${it.shareUrl}`;
+        return `${idx + 1}) Failed: ${it?.message || 'Error'}\n   URL: ${it?.inputUrl || ''}`;
+      });
+
+      // Telegram message limit is ~4096 chars; chunk if needed
+      const out = lines.join('\n\n');
+      if (out.length <= 3500) {
+        bot.sendMessage(msg.chat.id, out);
+      } else {
+        // chunk
+        let chunk = '';
+        for (const line of lines) {
+          if ((chunk + '\n\n' + line).length > 3500) {
+            // eslint-disable-next-line no-await-in-loop
+            await bot.sendMessage(msg.chat.id, chunk.trim());
+            chunk = '';
+          }
+          chunk += (chunk ? '\n\n' : '') + line;
+        }
+        if (chunk.trim()) await bot.sendMessage(msg.chat.id, chunk.trim());
+      }
+      return;
+    }
+
+    // Single URL
     bot.sendMessage(msg.chat.id, 'Generating short link...');
-    const r = await generateTelegramShortLink({ telegramUserId, url });
+    const r = await generateTelegramShortLink({ telegramUserId, url: urls[0] });
 
     if (!r.ok) {
       bot.sendMessage(msg.chat.id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
