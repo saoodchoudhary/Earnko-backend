@@ -1,96 +1,135 @@
 const express = require('express');
 const mongoose = require('mongoose');
-let adminAuth, auth
-try { ({ adminAuth, auth } = require('../../middleware/auth')) } catch {}
+let adminAuth, auth;
+try { ({ adminAuth, auth } = require('../../middleware/auth')); } catch {}
 const SupportTicket = require('../../models/SupportTicket');
 const User = require('../../models/User');
 const { getIO } = require('../../socket/io');
 
+const { sendMail, formatTicketHtml, formatTicketText } = require('../../services/mailer');
+
 const ensureAdmin = (req, res, next) => {
-  if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' })
-  if (req.user.role !== 'admin') return res.status(403).json({ success: false, message: 'Forbidden' })
-  next()
-}
-const adminMiddleware = adminAuth ? [adminAuth] : (auth ? [auth, ensureAdmin] : [ensureAdmin])
+  if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+  if (req.user.role !== 'admin') return res.status(403).json({ success: false, message: 'Forbidden' });
+  next();
+};
+const adminMiddleware = adminAuth ? [adminAuth] : (auth ? [auth, ensureAdmin] : [ensureAdmin]);
 
 const router = express.Router();
 
 router.get('/tickets', ...adminMiddleware, async (req, res) => {
   try {
-    const { page = 1, limit = 20, status = '', q = '' } = req.query
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1)
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100)
+    const { page = 1, limit = 20, status = '', q = '' } = req.query;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
-    const filter = {}
-    if (status) filter.status = status
+    const filter = {};
+    if (status) filter.status = status;
+
     if (q) {
-      const re = new RegExp(q, 'i')
-      const users = await User.find({ $or: [{ email: re }, { name: re }] }, { _id: 1 }).lean()
-      const userIds = users.map(u => u._id)
-      filter.$or = [{ subject: re }]
-      if (userIds.length) filter.$or.push({ user: { $in: userIds } })
+      const re = new RegExp(q, 'i');
+      const users = await User.find({ $or: [{ email: re }, { name: re }] }, { _id: 1 }).lean();
+      const userIds = users.map(u => u._id);
+      filter.$or = [{ subject: re }];
+      if (userIds.length) filter.$or.push({ user: { $in: userIds } });
     }
 
     const [items, total] = await Promise.all([
-      SupportTicket.find(filter).populate('user', 'name email').sort('-updatedAt').skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+      SupportTicket.find(filter)
+        .populate('user', 'name email')
+        .sort('-updatedAt')
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
       SupportTicket.countDocuments(filter)
-    ])
+    ]);
 
-    res.json({ success: true, data: { items, total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum } })
+    res.json({ success: true, data: { items, total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum } });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Internal server error' })
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
-})
+});
 
 router.get('/tickets/:id', ...adminMiddleware, async (req, res) => {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' })
-    const ticket = await SupportTicket.findById(req.params.id).populate('user', 'name email').lean()
-    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
-    res.json({ success: true, data: { ticket } })
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+    const ticket = await SupportTicket.findById(req.params.id).populate('user', 'name email').lean();
+    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' });
+    res.json({ success: true, data: { ticket } });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Internal server error' })
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
-})
+});
 
 router.post('/tickets/:id/reply', ...adminMiddleware, async (req, res) => {
   try {
-    const { message } = req.body || {}
-    if (!message) return res.status(400).json({ success: false, message: 'Message required' })
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' })
+    const { message } = req.body || {};
+    if (!message) return res.status(400).json({ success: false, message: 'Message required' });
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
 
-    const ticket = await SupportTicket.findById(req.params.id)
-    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
+    const ticket = await SupportTicket.findById(req.params.id);
+    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' });
 
-    const reply = { by: 'admin', message, createdAt: new Date() }
-    ticket.replies.push(reply)
-    ticket.updatedAt = new Date()
-    await ticket.save()
+    const reply = { by: 'admin', message, createdAt: new Date() };
+    ticket.replies.push(reply);
+    ticket.updatedAt = new Date();
+    await ticket.save();
 
     try { getIO().to(`ticket:${ticket._id}`).emit('support:message', { ticketId: ticket._id.toString(), reply }); } catch {}
 
-    res.status(201).json({ success: true, data: { ticket } })
+    res.status(201).json({ success: true, data: { ticket } });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Internal server error' })
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
-})
+});
 
 router.patch('/tickets/:id/status', ...adminMiddleware, async (req, res) => {
   try {
-    const { status } = req.body || {}
-    const allowed = ['open','in_progress','resolved','closed']
-    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' })
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' })
+    const { status } = req.body || {};
+    const allowed = ['open', 'in_progress', 'resolved', 'closed'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
 
-    const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, { status, updatedAt: new Date() }, { new: true })
-    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' })
+    const ticket = await SupportTicket.findByIdAndUpdate(
+      req.params.id,
+      { status, updatedAt: new Date() },
+      { new: true }
+    );
+    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' });
 
     try { getIO().to(`ticket:${ticket._id}`).emit('support:status', { ticketId: ticket._id.toString(), status, updatedAt: ticket.updatedAt }); } catch {}
 
-    res.json({ success: true, data: { ticket } })
+    res.json({ success: true, data: { ticket } });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Internal server error' })
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
-})
+});
 
-module.exports = router
+/**
+ * POST /api/admin/support/tickets/:id/email-user
+ * Sends full chat transcript to the ticket user (1 click)
+ */
+router.post('/tickets/:id/email-user', ...adminMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+
+    const ticket = await SupportTicket.findById(req.params.id).lean();
+    if (!ticket) return res.status(404).json({ success: false, message: 'Not found' });
+
+    const user = await User.findById(ticket.user).select('name email').lean();
+    if (!user || !user.email) return res.status(400).json({ success: false, message: 'User email not found' });
+
+    const subject = `[Earnko Support] Ticket update: ${ticket.subject} (${String(ticket._id).slice(0, 8)})`;
+    const html = formatTicketHtml({ ticket, user, actorLabel: 'Support transcript' });
+    const text = formatTicketText({ ticket, user });
+
+    await sendMail({ to: user.email, subject, html, text, replyTo: process.env.SUPPORT_INBOX_EMAIL || 'contact@earnko.com' });
+
+    return res.json({ success: true, message: 'Email sent to user' });
+  } catch (err) {
+    console.error('email-user error', err);
+    return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+  }
+});
+
+module.exports = router;

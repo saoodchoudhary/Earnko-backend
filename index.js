@@ -118,7 +118,7 @@ const io = new Server(server, {
 });
 setIO(io);
 initSupportSockets(io);
-startTelegramBot();
+// startTelegramBot();
 // Start
 async function start() {
   try {
