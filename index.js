@@ -10,7 +10,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { setIO } = require('./socket/io');
 const { initSupportSockets } = require('./socket/support');
-
+const { startTelegramBot } = require('./services/telegramBotRunner');
 const config = {
   port: process.env.PORT || 8080,
   mongoUri: process.env.MONGODB_URI
@@ -118,7 +118,7 @@ const io = new Server(server, {
 });
 setIO(io);
 initSupportSockets(io);
-
+startTelegramBot();
 // Start
 async function start() {
   try {
