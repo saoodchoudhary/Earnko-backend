@@ -1,72 +1,92 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const { auth } = require('../middleware/auth');
 const User = require('../models/User');
+const { createAffiliateLinkStrict } = require('../services/linkifyService');
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
-const TELEGRAM_BOT_API_KEY = process.env.TELEGRAM_BOT_API_KEY || '';
-
-function requireApiKey(req, res, next) {
-  const key = req.get('x-api-key') || '';
-  if (!TELEGRAM_BOT_API_KEY || key !== TELEGRAM_BOT_API_KEY) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
-  }
-  return next();
-}
-
-// 1) Website user connects telegram
+/**
+ * POST /api/integrations/telegram/connect
+ * body: { telegramUserId }
+ *
+ * Frontend page: /telegram/connect already calls this with Bearer token from localStorage. citeturn9search0
+ */
 router.post('/telegram/connect', auth, async (req, res) => {
   try {
     const telegramUserId = String(req.body?.telegramUserId || '').trim();
-    const telegramUsername = String(req.body?.telegramUsername || '').trim();
+    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
 
-    if (!telegramUserId) {
-      return res.status(400).json({ success: false, message: 'telegramUserId required' });
-    }
-
-    // prevent same telegram being linked to multiple accounts
-    const already = await User.findOne({ 'telegram.userId': telegramUserId }).select('_id').lean();
-    if (already && String(already._id) !== String(req.user._id)) {
-      return res.status(409).json({ success: false, message: 'This Telegram account is already connected to another user' });
-    }
-
+    // Save mapping on the logged-in user
     await User.updateOne(
       { _id: req.user._id },
       {
         $set: {
           'telegram.userId': telegramUserId,
-          'telegram.username': telegramUsername,
           'telegram.connectedAt': new Date()
         }
       }
     );
 
-    return res.json({ success: true, data: { telegramUserId } });
+    return res.json({ success: true, message: 'Connected' });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    console.error('telegram connect error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// 2) Make.com asks for a short-lived token for a telegram user
-router.post('/telegram/bot-token', requireApiKey, async (req, res) => {
+/**
+ * POST /api/integrations/telegram/link-from-url
+ * body: { telegramUserId, url, storeId? }
+ *
+ * This is the key fix:
+ * - Bot sends telegramUserId + url
+ * - Backend finds linked user
+ * - Runs the same link generation as website (createAffiliateLinkStrict)
+ * - Returns only shareUrl (short link)
+ */
+router.post('/telegram/link-from-url', async (req, res) => {
   try {
     const telegramUserId = String(req.body?.telegramUserId || '').trim();
-    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
+    const url = String(req.body?.url || '').trim();
+    const storeId = req.body?.storeId || null;
 
-    const user = await User.findOne({ 'telegram.userId': telegramUserId }).select('_id accountStatus').lean();
-    if (!user) return res.status(404).json({ success: false, message: 'User not connected. Ask them to /connect' });
-    if (user.accountStatus && user.accountStatus !== 'active') {
-      return res.status(403).json({ success: false, message: 'User account is not active' });
+    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
+    if (!url) return res.status(400).json({ success: false, message: 'url required' });
+
+    // find user linked to this telegram id
+    const user = await User.findOne({ 'telegram.userId': telegramUserId });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
     }
 
-    // token compatible with middleware/auth.js which expects decoded.userId
-    const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '10m' });
+    // validate storeId if provided
+    if (storeId && !mongoose.Types.ObjectId.isValid(storeId)) {
+      return res.status(400).json({ success: false, message: 'Invalid storeId' });
+    }
 
-    return res.json({ success: true, data: { token, expiresIn: 600 } });
+    const result = await createAffiliateLinkStrict({ user, url, storeId: storeId || null });
+
+    // Return only short link for Telegram
+    return res.json({
+      success: true,
+      data: {
+        shareUrl: result.shareUrl,
+        slug: result.slug
+      }
+    });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    console.error('telegram link-from-url error', err);
+    const code = err?.code || '';
+    const msg = err?.message || 'Server error';
+
+    // Keep consistent client-facing statuses
+    if (code === 'bad_request') return res.status(400).json({ success: false, message: msg });
+    if (code === 'store_not_found_for_url') return res.status(400).json({ success: false, message: msg });
+    if (code === 'store_network_missing') return res.status(400).json({ success: false, message: msg });
+    if (code === 'realcash_missing_base') return res.status(400).json({ success: false, message: msg });
+
+    return res.status(500).json({ success: false, message: msg });
   }
 });
 

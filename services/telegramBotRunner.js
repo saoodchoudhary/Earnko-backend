@@ -1,20 +1,16 @@
 require('dotenv').config();
 
 const TelegramBot = require('node-telegram-bot-api');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
 
-// Node 18+ has global fetch. If not, fallback to undici
 let fetchFn = globalThis.fetch;
 if (!fetchFn) {
-  try {
-    fetchFn = require('undici').fetch;
-  } catch {
-    throw new Error('No fetch available. Use Node 18+ or install undici');
-  }
+  try { fetchFn = require('undici').fetch; } catch { throw new Error('No fetch available. Use Node 18+ or install undici'); }
 }
 
-let started = false;
+// singleton to avoid double handlers
+if (global.__EARNKO_TELEGRAM_BOT_SINGLETON__ == null) {
+  global.__EARNKO_TELEGRAM_BOT_SINGLETON__ = { started: false };
+}
 
 function safeBase(u, fallback) {
   const s = String(u || fallback || '').trim();
@@ -25,10 +21,10 @@ function frontendBase() {
   return safeBase(process.env.FRONTEND_URL, 'http://localhost:3000');
 }
 
-function backendBase() {
-  // This should be your public API base if deployed, otherwise local
-  // Used only for calling API endpoints from the bot.
-  return safeBase(process.env.BACKEND_API || process.env.BACKEND_URL, `http://localhost:${process.env.PORT || 8080}`);
+function backendPublicBase() {
+  // IMPORTANT: must be your public API domain in production, not localhost.
+  // Example: https://api.earnko.com
+  return safeBase(process.env.BACKEND_URL || process.env.BACKEND_API, `http://localhost:${process.env.PORT || 8080}`);
 }
 
 function extractUrl(text) {
@@ -55,54 +51,17 @@ Commands:
 • /help    - Help`;
 }
 
-/**
- * Find connected user by Telegram userId.
- * Assumes user schema has telegram.userId = String (or Number stored as string).
- */
-async function findUserByTelegramId(telegramUserId) {
-  const tg = String(telegramUserId || '').trim();
-  if (!tg) return null;
-
-  // Try common shapes
-  // 1) telegram.userId
-  let user = await User.findOne({ 'telegram.userId': tg }).lean();
-  if (user) return user;
-
-  // 2) telegramUserId flat (if some code uses this)
-  user = await User.findOne({ telegramUserId: tg }).lean();
-  if (user) return user;
-
-  // 3) telegram.id
-  user = await User.findOne({ 'telegram.id': tg }).lean();
-  return user || null;
-}
-
-/**
- * Issue a server-side JWT for the user (same as normal auth middleware expects).
- * This avoids needing user password/token inside Telegram.
- */
-function issueJwtForUser(user) {
-  const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
-  return jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-}
-
-async function generateShortLinkOnly({ token, url }) {
-  const base = backendBase();
-
-  const res = await fetchFn(`${base}/api/affiliate/link-from-url`, {
+async function generateTelegramShortLink({ telegramUserId, url }) {
+  const base = backendPublicBase();
+  const res = await fetchFn(`${base}/api/integrations/telegram/link-from-url`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({ url })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegramUserId, url })
   });
 
   const data = await res.json().catch(() => ({}));
-
   if (!res.ok || !data?.success) {
-    const msg = data?.message || `Request failed (${res.status})`;
-    return { ok: false, message: msg };
+    return { ok: false, message: data?.message || `Request failed (${res.status})` };
   }
 
   const short = data?.data?.shareUrl;
@@ -112,8 +71,7 @@ async function generateShortLinkOnly({ token, url }) {
 }
 
 function startTelegramBot() {
-  if (started) return;
-  started = true;
+  if (global.__EARNKO_TELEGRAM_BOT_SINGLETON__.started) return;
 
   const token = process.env.TELEGRAM_TOKEN;
   if (!token) {
@@ -121,13 +79,17 @@ function startTelegramBot() {
     return;
   }
 
+  global.__EARNKO_TELEGRAM_BOT_SINGLETON__.started = true;
+
   const bot = new TelegramBot(token, { polling: true });
 
-  // /start (professional steps)
-  bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
+  bot.on('polling_error', (err) => {
+    console.error('[telegram-bot] polling_error:', err?.message || err);
+  });
+
+  bot.onText(/\/start/, (msg) => {
     bot.sendMessage(
-      chatId,
+      msg.chat.id,
       `Welcome to EarnkoBot ✅
 
 Step 1: Connect your Earnko account
@@ -147,15 +109,12 @@ Type /help to see all commands.`
     bot.sendMessage(msg.chat.id, buildHelpText());
   });
 
-  // /connect: provide frontend connect URL
   bot.onText(/\/connect/, (msg) => {
-    const chatId = msg.chat.id;
     const tgId = String(msg.from?.id || '');
-
     const url = `${frontendBase()}/telegram/connect?tgId=${encodeURIComponent(tgId)}`;
 
     bot.sendMessage(
-      chatId,
+      msg.chat.id,
       `Connect your Earnko account (secure):
 
 ${url}
@@ -165,61 +124,29 @@ Once you see "Connected!", come back here and paste a product URL.`
     );
   });
 
-  // /logout: disconnect telegram
-  // NOTE: This only clears Telegram field in DB if you want. If you don't want DB write here, remove it.
-  bot.onText(/\/logout/, async (msg) => {
-    const chatId = msg.chat.id;
-    const tgId = String(msg.from?.id || '');
-
-    try {
-      // Best-effort: unset telegram link in DB
-      await User.updateOne(
-        { 'telegram.userId': tgId },
-        { $set: { 'telegram.userId': '', 'telegram.connectedAt': null } }
-      );
-    } catch (e) {
-      // ignore
-    }
-
-    bot.sendMessage(chatId, 'Disconnected. Use /connect to link again.');
+  bot.onText(/\/logout/, (msg) => {
+    // We are not unlinking DB here (optional). If you want unlink, do it via a backend endpoint.
+    bot.sendMessage(msg.chat.id, 'To disconnect, please reconnect from /connect anytime. (Logout is optional)');
   });
 
-  // Handle normal messages: if contains URL -> generate short link
   bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
-
-    // ignore commands
     if (String(text).startsWith('/')) return;
 
     const url = extractUrl(text);
     if (!url) return;
 
-    // check if connected
-    const tgId = String(msg.from?.id || '');
-    const user = await findUserByTelegramId(tgId);
+    const telegramUserId = String(msg.from?.id || '');
 
-    if (!user) {
-      bot.sendMessage(chatId, `Your Telegram is not connected to Earnko yet.\nPlease type /connect first.`);
-      return;
-    }
-
-    // issue server-side JWT and call affiliate API
-    const userJwt = issueJwtForUser(user);
-
-    bot.sendMessage(chatId, 'Generating short link...');
-    const r = await generateShortLinkOnly({ token: userJwt, url });
+    bot.sendMessage(msg.chat.id, 'Generating short link...');
+    const r = await generateTelegramShortLink({ telegramUserId, url });
 
     if (!r.ok) {
-      bot.sendMessage(chatId, `Failed: ${r.message}\nTry again or run /connect again.`);
+      bot.sendMessage(msg.chat.id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
       return;
     }
 
-    bot.sendMessage(chatId, `Short link:\n${r.short}`);
-  });
-
-  bot.on('polling_error', (err) => {
-    console.error('[telegram-bot] polling_error:', err?.message || err);
+    bot.sendMessage(msg.chat.id, `Short link:\n${r.short}`);
   });
 
   console.log('[telegram-bot] started (polling).');
