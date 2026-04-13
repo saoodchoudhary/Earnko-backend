@@ -76,6 +76,8 @@ function buildHelpText() {
 Commands:
 • /start   - Getting started
 • /connect - Connect Telegram with Earnko
+• /profile - Show connected account
+• /logout  - Disconnect Telegram
 • /help    - Help`;
 }
 
@@ -104,6 +106,32 @@ async function generateTelegramShortLinksBulk({ telegramUserId, urls }) {
   if (!res.ok || !data?.success) return { ok: false, message: data?.message || `Request failed (${res.status})` };
   const results = data?.data?.results || [];
   return { ok: true, results };
+}
+
+// NEW: fetch connected profile by telegramUserId
+async function fetchTelegramProfile({ telegramUserId }) {
+  const base = backendPublicBase();
+  const res = await fetchFn(`${base}/api/integrations/telegram/profile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegramUserId })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.success) return { ok: false, message: data?.message || `Request failed (${res.status})` };
+  return { ok: true, profile: data?.data?.user || null };
+}
+
+// NEW: disconnect telegram mapping
+async function disconnectTelegram({ telegramUserId }) {
+  const base = backendPublicBase();
+  const res = await fetchFn(`${base}/api/integrations/telegram/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegramUserId })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.success) return { ok: false, message: data?.message || `Request failed (${res.status})` };
+  return { ok: true };
 }
 
 // Send "Generating..." message, then edit it later to final response (clean UX)
@@ -142,7 +170,6 @@ async function replyWithMediaAndLinks({ bot, msg, userText, linksText }) {
   const commonOpts = { reply_to_message_id: replyTo, caption, disable_web_page_preview: true };
 
   if (!media) {
-    // no media: send text
     const combined = [userText, linksText].filter(Boolean).join('\n\n').trim();
     if (combined) {
       await bot.sendMessage(chatId, combined, { reply_to_message_id: replyTo, disable_web_page_preview: true });
@@ -150,19 +177,10 @@ async function replyWithMediaAndLinks({ bot, msg, userText, linksText }) {
     return;
   }
 
-  if (media.type === 'photo') {
-    await bot.sendPhoto(chatId, media.fileId, commonOpts);
-    return;
-  }
-  if (media.type === 'video') {
-    await bot.sendVideo(chatId, media.fileId, commonOpts);
-    return;
-  }
-  if (media.type === 'animation') {
-    await bot.sendAnimation(chatId, media.fileId, commonOpts);
-    return;
-  }
-  await bot.sendDocument(chatId, media.fileId, commonOpts);
+  if (media.type === 'photo') return bot.sendPhoto(chatId, media.fileId, commonOpts);
+  if (media.type === 'video') return bot.sendVideo(chatId, media.fileId, commonOpts);
+  if (media.type === 'animation') return bot.sendAnimation(chatId, media.fileId, commonOpts);
+  return bot.sendDocument(chatId, media.fileId, commonOpts);
 }
 
 function startTelegramBot() {
@@ -196,6 +214,10 @@ Step 2: Generate short links
 • You can also send an image/video + caption with link(s)
 • I will generate short share links for all URLs
 
+Useful:
+• /profile (see which account is connected)
+• /logout  (disconnect so you can connect another account)
+
 Type /help to see all commands.`
     );
   });
@@ -217,8 +239,49 @@ ${url}
 If it says "Please login", then login to Earnko and open the same link again.
 Once you see "Connected!", come back here and paste product URLs.
 
-Login Link: ${frontendBase()}/login
-`
+Login Link: ${frontendBase()}/login`
+    );
+  });
+
+  // ✅ NEW: /profile
+  bot.onText(/\/profile/, async (msg) => {
+    const telegramUserId = String(msg.from?.id || '');
+    const genMsg = await bot.sendMessage(msg.chat.id, 'Checking profile...', { reply_to_message_id: msg.message_id });
+
+    const r = await fetchTelegramProfile({ telegramUserId });
+    if (!r.ok) {
+      await safeEdit(bot, genMsg.chat.id, genMsg.message_id, `Failed: ${r.message}\nRun /connect first.`);
+      return;
+    }
+
+    const u = r.profile || {};
+    const text =
+      `Connected Account ✅\n\n` +
+      `Name: ${u.name || '-'}\n` +
+      `Email: ${u.email || '-'}\n` +
+      `User ID: ${u.id || u._id || '-'}\n` +
+      `Provider: ${u.provider || '-'}\n\n` +
+      `To change account: /logout then /connect`;
+
+    await safeEdit(bot, genMsg.chat.id, genMsg.message_id, text);
+  });
+
+  // ✅ NEW: /logout (disconnect telegram mapping server-side)
+  bot.onText(/\/logout/, async (msg) => {
+    const telegramUserId = String(msg.from?.id || '');
+    const genMsg = await bot.sendMessage(msg.chat.id, 'Logging out...', { reply_to_message_id: msg.message_id });
+
+    const r = await disconnectTelegram({ telegramUserId });
+    if (!r.ok) {
+      await safeEdit(bot, genMsg.chat.id, genMsg.message_id, `Failed: ${r.message}`);
+      return;
+    }
+
+    await safeEdit(
+      bot,
+      genMsg.chat.id,
+      genMsg.message_id,
+      `Disconnected ✅\nNow run /connect to link another Earnko account.`
     );
   });
 
@@ -231,10 +294,9 @@ Login Link: ${frontendBase()}/login
 
     const telegramUserId = String(msg.from?.id || '');
 
-    // ✅ Do not echo input URLs: keep only non-URL caption/text
+    // Do not echo input URLs: keep only non-URL caption/text
     const userText = stripUrls(rawText);
 
-    // Send generating message (requested)
     const genMsg = await sendGenerating(bot, msg, Math.min(urls.length, 25));
 
     // MULTI
@@ -242,7 +304,6 @@ Login Link: ${frontendBase()}/login
       const r = await generateTelegramShortLinksBulk({ telegramUserId, urls: urls.slice(0, 25) });
 
       if (!r.ok) {
-        // Edit the generating message to error (clean)
         await safeEdit(bot, genMsg.chat.id, genMsg.message_id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
         return;
       }
@@ -253,7 +314,7 @@ Login Link: ${frontendBase()}/login
         return;
       }
 
-      // ✅ Remove numbering: only links line-by-line
+      // remove numbering: only links line-by-line
       const okLinks = results
         .filter(x => x?.success && x?.shareUrl)
         .map(x => String(x.shareUrl));
@@ -267,10 +328,7 @@ Login Link: ${frontendBase()}/login
         failLines.length ? `\n\n${failLines.join('\n\n')}` : ''
       ].join('').trim();
 
-      // Edit generating message to something small (optional)
       await safeEdit(bot, genMsg.chat.id, genMsg.message_id, 'Done ✅');
-
-      // Reply with media/text + links (no input url)
       await replyWithMediaAndLinks({ bot, msg, userText, linksText });
       return;
     }
@@ -284,13 +342,7 @@ Login Link: ${frontendBase()}/login
     }
 
     await safeEdit(bot, genMsg.chat.id, genMsg.message_id, 'Done ✅');
-
-    await replyWithMediaAndLinks({
-      bot,
-      msg,
-      userText,
-      linksText: r.short
-    });
+    await replyWithMediaAndLinks({ bot, msg, userText, linksText: r.short });
   });
 
   console.log('[telegram-bot] started (polling).');

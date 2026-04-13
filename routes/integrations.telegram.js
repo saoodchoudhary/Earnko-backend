@@ -8,9 +8,8 @@ const router = express.Router();
 
 /**
  * POST /api/integrations/telegram/connect
+ * auth required
  * body: { telegramUserId }
- *
- * Used by frontend page: /telegram/connect?tgId=...
  */
 router.post('/telegram/connect', auth, async (req, res) => {
   try {
@@ -50,9 +49,56 @@ function mapErrorToStatus(err) {
 }
 
 /**
+ * POST /api/integrations/telegram/profile
+ * body: { telegramUserId }
+ * returns minimal user info so Telegram bot can show who is connected
+ */
+router.post('/telegram/profile', async (req, res) => {
+  try {
+    const telegramUserId = String(req.body?.telegramUserId || '').trim();
+    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
+
+    const user = await User.findOne({ 'telegram.userId': telegramUserId })
+      .select('_id name email provider role')
+      .lean();
+
+    if (!user) return res.status(404).json({ success: false, message: 'Not connected. Run /connect first.' });
+
+    return res.json({
+      success: true,
+      data: { user: { id: user._id, name: user.name, email: user.email, provider: user.provider, role: user.role } }
+    });
+  } catch (err) {
+    console.error('telegram profile error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+/**
+ * POST /api/integrations/telegram/disconnect
+ * body: { telegramUserId }
+ * Disconnect mapping so user can connect another account.
+ */
+router.post('/telegram/disconnect', async (req, res) => {
+  try {
+    const telegramUserId = String(req.body?.telegramUserId || '').trim();
+    if (!telegramUserId) return res.status(400).json({ success: false, message: 'telegramUserId required' });
+
+    await User.updateOne(
+      { 'telegram.userId': telegramUserId },
+      { $set: { 'telegram.userId': '', 'telegram.connectedAt': null } }
+    );
+
+    return res.json({ success: true, message: 'Disconnected' });
+  } catch (err) {
+    console.error('telegram disconnect error', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+/**
  * POST /api/integrations/telegram/link-from-url
  * body: { telegramUserId, url, storeId? }
- * returns: { shareUrl, slug }
  */
 router.post('/telegram/link-from-url', async (req, res) => {
   try {
@@ -68,16 +114,11 @@ router.post('/telegram/link-from-url', async (req, res) => {
     }
 
     const user = await User.findOne({ 'telegram.userId': telegramUserId });
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
-    }
+    if (!user) return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
 
     const result = await createAffiliateLinkStrict({ user, url, storeId: storeId || null });
 
-    return res.json({
-      success: true,
-      data: { shareUrl: result.shareUrl, slug: result.slug }
-    });
+    return res.json({ success: true, data: { shareUrl: result.shareUrl, slug: result.slug } });
   } catch (err) {
     console.error('telegram link-from-url error', err);
     return res.status(mapErrorToStatus(err)).json({ success: false, message: err?.message || 'Server error' });
@@ -87,9 +128,6 @@ router.post('/telegram/link-from-url', async (req, res) => {
 /**
  * POST /api/integrations/telegram/link-from-url/bulk
  * body: { telegramUserId, urls: [ ... ], storeId? }
- *
- * returns:
- * { results: [{ inputUrl, success, shareUrl?, slug?, message? }] }
  */
 router.post('/telegram/link-from-url/bulk', async (req, res) => {
   try {
@@ -104,32 +142,20 @@ router.post('/telegram/link-from-url/bulk', async (req, res) => {
     const urls = safeUrlList(req.body?.urls);
     if (!urls.length) return res.status(400).json({ success: false, message: 'urls array required' });
 
+    const user = await User.findOne({ 'telegram.userId': telegramUserId });
+    if (!user) return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
+
     const MAX = 25;
     const slice = urls.slice(0, MAX);
 
-    const user = await User.findOne({ 'telegram.userId': telegramUserId });
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Telegram not connected. Please run /connect.' });
-    }
-
-    // Sequential to avoid provider rate limits; can be parallel later if needed
     const results = [];
     for (const inputUrl of slice) {
       try {
         // eslint-disable-next-line no-await-in-loop
         const out = await createAffiliateLinkStrict({ user, url: inputUrl, storeId: storeId || null });
-        results.push({
-          inputUrl,
-          success: true,
-          shareUrl: out.shareUrl,
-          slug: out.slug
-        });
+        results.push({ inputUrl, success: true, shareUrl: out.shareUrl, slug: out.slug });
       } catch (err) {
-        results.push({
-          inputUrl,
-          success: false,
-          message: err?.message || 'Failed'
-        });
+        results.push({ inputUrl, success: false, message: err?.message || 'Failed' });
       }
     }
 
