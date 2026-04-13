@@ -36,7 +36,7 @@ async function fetchMe({ backendApi, token }) {
   return data?.data?.user || null;
 }
 
-async function generateAffiliateLink({ backendApi, token, url }) {
+async function generateShortLinkOnly({ backendApi, token, url }) {
   const res = await fetchFn(`${backendApi}/api/affiliate/link-from-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -44,9 +44,11 @@ async function generateAffiliateLink({ backendApi, token, url }) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data?.success) return { ok: false, message: data?.message || 'Failed to generate link' };
-  const link = data?.data?.link || data?.data?.shareUrl || data?.data?.providerLink;
-  if (!link) return { ok: false, message: 'Backend did not return link' };
-  return { ok: true, link };
+
+  // ✅ Only return shareUrl (short link)
+  const short = data?.data?.shareUrl || null;
+  if (!short) return { ok: false, message: 'shareUrl not returned by backend' };
+  return { ok: true, short };
 }
 
 function startTelegramBot() {
@@ -60,6 +62,7 @@ function startTelegramBot() {
   }
 
   const BACKEND_API = (process.env.BACKEND_API || `http://localhost:${process.env.PORT || 8080}`).replace(/\/+$/, '');
+  const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
 
   const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
   const sessionMap = new Map(); // chatId -> { token, user }
@@ -67,13 +70,19 @@ function startTelegramBot() {
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(
       msg.chat.id,
-      `Welcome to EarnkoBot.\n\n/login - Login (email+password)\n/logout - Logout\n/profile - Profile\n\nAfter login, paste any product URL to generate affiliate link.`
+      `Welcome to EarnkoBot.
+
+Login options:
+1) /login  (email + password)
+2) /google (Google login; then send /token <JWT>)
+
+After login: paste any product URL and I will return ONLY a short link.`
     );
   });
 
   bot.onText(/\/logout/, (msg) => {
     sessionMap.delete(msg.chat.id);
-    bot.sendMessage(msg.chat.id, 'Logged out. Use /login again.');
+    bot.sendMessage(msg.chat.id, 'Logged out. Use /login or /google again.');
   });
 
   bot.onText(/\/profile/, (msg) => {
@@ -83,6 +92,34 @@ function startTelegramBot() {
     return bot.sendMessage(msg.chat.id, `Profile:\nName: ${u.name || '-'}\nEmail: ${u.email || '-'}\nRole: ${u.role || '-'}`);
   });
 
+  // ✅ Google login helper
+  bot.onText(/\/google/, (msg) => {
+    const chatId = msg.chat.id;
+    const url = `${BACKEND_API}/api/auth/google?redirect=${encodeURIComponent(`${FRONTEND_URL}/oauth/callback`)}`;
+    bot.sendMessage(
+      chatId,
+      `Google login link:
+${url}
+
+Login in browser, then copy the token from the callback URL and send:
+ /token <PASTE_TOKEN_HERE>`
+    );
+  });
+
+  // ✅ token set (for google users)
+  bot.onText(/\/token (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const token = String(match?.[1] || '').trim();
+    if (!token) return bot.sendMessage(chatId, 'Token missing. Example: /token eyJhbGciOi...');
+
+    const user = await fetchMe({ backendApi: BACKEND_API, token });
+    if (!user) return bot.sendMessage(chatId, 'Invalid token (or expired). Please /google again.');
+
+    sessionMap.set(chatId, { token, user });
+    bot.sendMessage(chatId, `Logged in as ${user?.name || user?.email}. Now paste a product URL.`);
+  });
+
+  // email+password login (for local users)
   bot.onText(/\/login/, (msg) => {
     const chatId = msg.chat.id;
 
@@ -105,29 +142,31 @@ function startTelegramBot() {
                 const user = await fetchMe({ backendApi: BACKEND_API, token: r.token });
                 sessionMap.set(chatId, { token: r.token, user });
 
-                bot.sendMessage(chatId, `Logged in as ${user?.name || email}. Now paste a product link.`);
+                bot.sendMessage(chatId, `Logged in as ${user?.name || email}. Now paste a product URL.`);
               });
             });
         });
       });
   });
 
+  // URL handler: return only shareUrl (short link)
   bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
 
     if (text.startsWith('/')) return;
+
     const url = extractUrl(text);
     if (!url) return;
 
     const sess = sessionMap.get(chatId);
-    if (!sess?.token) return bot.sendMessage(chatId, 'Please /login first.');
+    if (!sess?.token) return bot.sendMessage(chatId, 'Please login first: /login or /google');
 
-    bot.sendMessage(chatId, 'Generating link...');
-    const r = await generateAffiliateLink({ backendApi: BACKEND_API, token: sess.token, url });
+    bot.sendMessage(chatId, 'Generating short link...');
+    const r = await generateShortLinkOnly({ backendApi: BACKEND_API, token: sess.token, url });
     if (!r.ok) return bot.sendMessage(chatId, `Failed: ${r.message}`);
 
-    bot.sendMessage(chatId, `Your link:\n${r.link}`);
+    bot.sendMessage(chatId, `Short link:\n${r.short}`);
   });
 
   bot.on('polling_error', (err) => {
