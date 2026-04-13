@@ -38,25 +38,26 @@ function extractAllUrls(text) {
   return out;
 }
 
+// Remove URLs from text (keep other caption/text)
+function stripUrls(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/https?:\/\/[^\s]+/gi, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n\s+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 // Pick best media from telegram message
 function getMediaFromMsg(msg) {
-  // Photo: pick largest size (last is usually largest)
   if (Array.isArray(msg.photo) && msg.photo.length) {
     const best = msg.photo[msg.photo.length - 1];
     return { type: 'photo', fileId: best.file_id };
   }
-  // Document (sometimes images come as doc)
-  if (msg.document?.file_id) {
-    return { type: 'document', fileId: msg.document.file_id };
-  }
-  // Video
-  if (msg.video?.file_id) {
-    return { type: 'video', fileId: msg.video.file_id };
-  }
-  // Animation/GIF
-  if (msg.animation?.file_id) {
-    return { type: 'animation', fileId: msg.animation.file_id };
-  }
+  if (msg.document?.file_id) return { type: 'document', fileId: msg.document.file_id };
+  if (msg.video?.file_id) return { type: 'video', fileId: msg.video.file_id };
+  if (msg.animation?.file_id) return { type: 'animation', fileId: msg.animation.file_id };
   return null;
 }
 
@@ -105,68 +106,63 @@ async function generateTelegramShortLinksBulk({ telegramUserId, urls }) {
   return { ok: true, results };
 }
 
-async function sendTextInChunks(bot, chatId, text, opts = {}) {
-  const MAX = 3500; // keep safe margin
-  const s = String(text || '').trim();
-  if (!s) return;
-
-  if (s.length <= MAX) {
-    await bot.sendMessage(chatId, s, opts);
-    return;
-  }
-
-  let chunk = '';
-  const parts = s.split('\n');
-  for (const line of parts) {
-    const next = chunk ? `${chunk}\n${line}` : line;
-    if (next.length > MAX) {
-      // eslint-disable-next-line no-await-in-loop
-      await bot.sendMessage(chatId, chunk, opts);
-      chunk = line;
-    } else {
-      chunk = next;
-    }
-  }
-  if (chunk) await bot.sendMessage(chatId, chunk, opts);
+// Send "Generating..." message, then edit it later to final response (clean UX)
+async function sendGenerating(bot, msg, count) {
+  const chatId = msg.chat.id;
+  const replyTo = msg.message_id;
+  const txt = count > 1 ? `Generating ${count} short links...` : 'Generating short link...';
+  return bot.sendMessage(chatId, txt, { reply_to_message_id: replyTo });
 }
 
+// Edit message safely
+async function safeEdit(bot, chatId, messageId, text) {
+  try {
+    await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, disable_web_page_preview: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Send media reply (without echoing the input URL; only non-URL caption/text + links)
 async function replyWithMediaAndLinks({ bot, msg, userText, linksText }) {
   const chatId = msg.chat.id;
   const replyTo = msg.message_id;
   const media = getMediaFromMsg(msg);
 
-  // Caption limit ~1024. Keep it short.
   const captionParts = [];
   if (userText) captionParts.push(String(userText).trim());
   if (linksText) captionParts.push(String(linksText).trim());
 
   let caption = captionParts.filter(Boolean).join('\n\n');
+
+  // Telegram caption limit ~1024; keep safe
   if (caption.length > 950) caption = caption.slice(0, 950) + '...';
 
-  const commonOpts = { reply_to_message_id: replyTo };
+  const commonOpts = { reply_to_message_id: replyTo, caption, disable_web_page_preview: true };
 
   if (!media) {
-    // no media: just reply with text chunks
+    // no media: send text
     const combined = [userText, linksText].filter(Boolean).join('\n\n').trim();
-    await sendTextInChunks(bot, chatId, combined, commonOpts);
+    if (combined) {
+      await bot.sendMessage(chatId, combined, { reply_to_message_id: replyTo, disable_web_page_preview: true });
+    }
     return;
   }
 
-  // If media exists: send same media with caption (text + links)
   if (media.type === 'photo') {
-    await bot.sendPhoto(chatId, media.fileId, { ...commonOpts, caption });
+    await bot.sendPhoto(chatId, media.fileId, commonOpts);
     return;
   }
   if (media.type === 'video') {
-    await bot.sendVideo(chatId, media.fileId, { ...commonOpts, caption });
+    await bot.sendVideo(chatId, media.fileId, commonOpts);
     return;
   }
   if (media.type === 'animation') {
-    await bot.sendAnimation(chatId, media.fileId, { ...commonOpts, caption });
+    await bot.sendAnimation(chatId, media.fileId, commonOpts);
     return;
   }
-  // document
-  await bot.sendDocument(chatId, media.fileId, { ...commonOpts, caption });
+  await bot.sendDocument(chatId, media.fileId, commonOpts);
 }
 
 function startTelegramBot() {
@@ -221,12 +217,11 @@ ${url}
 If it says "Please login", then login to Earnko and open the same link again.
 Once you see "Connected!", come back here and paste product URLs.
 
-Login Link: ${backendPublicBase()}/auth/login}
+Login Link: ${url}/login
 `
     );
   });
 
-  // MAIN HANDLER: works for text, captions, media
   bot.on('message', async (msg) => {
     const rawText = msg.text || msg.caption || '';
     if (String(rawText).startsWith('/')) return;
@@ -236,54 +231,59 @@ Login Link: ${backendPublicBase()}/auth/login}
 
     const telegramUserId = String(msg.from?.id || '');
 
-    // userText: original message/caption but WITHOUT urls (optional)
-    const userText = String(rawText || '').trim();
+    // ✅ Do not echo input URLs: keep only non-URL caption/text
+    const userText = stripUrls(rawText);
+
+    // Send generating message (requested)
+    const genMsg = await sendGenerating(bot, msg, Math.min(urls.length, 25));
 
     // MULTI
     if (urls.length > 1) {
       const r = await generateTelegramShortLinksBulk({ telegramUserId, urls: urls.slice(0, 25) });
+
       if (!r.ok) {
-        await replyWithMediaAndLinks({
-          bot,
-          msg,
-          userText,
-          linksText: `Failed: ${r.message}\nIf not connected, run /connect first.`
-        });
+        // Edit the generating message to error (clean)
+        await safeEdit(bot, genMsg.chat.id, genMsg.message_id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
         return;
       }
 
       const results = Array.isArray(r.results) ? r.results : [];
       if (!results.length) {
-        await replyWithMediaAndLinks({ bot, msg, userText, linksText: 'No results returned.' });
+        await safeEdit(bot, genMsg.chat.id, genMsg.message_id, 'No results returned.');
         return;
       }
 
-      // ✅ Remove numbering: just print links line-by-line
-      const okLinks = results.filter(x => x?.success && x?.shareUrl).map(x => String(x.shareUrl));
+      // ✅ Remove numbering: only links line-by-line
+      const okLinks = results
+        .filter(x => x?.success && x?.shareUrl)
+        .map(x => String(x.shareUrl));
+
       const failLines = results
         .filter(x => !x?.success)
-        .map(x => `Failed: ${x?.message || 'Error'}\n${x?.inputUrl || ''}`);
+        .map(x => `Failed: ${x?.message || 'Error'}`);
 
       const linksText = [
         okLinks.join('\n'),
         failLines.length ? `\n\n${failLines.join('\n\n')}` : ''
       ].join('').trim();
 
+      // Edit generating message to something small (optional)
+      await safeEdit(bot, genMsg.chat.id, genMsg.message_id, 'Done ✅');
+
+      // Reply with media/text + links (no input url)
       await replyWithMediaAndLinks({ bot, msg, userText, linksText });
       return;
     }
 
     // SINGLE
     const r = await generateTelegramShortLink({ telegramUserId, url: urls[0] });
+
     if (!r.ok) {
-      await replyWithMediaAndLinks({
-        bot,
-        msg,
-        userText,
-        linksText: `Failed: ${r.message}\nIf not connected, run /connect first.`
-      });
+      await safeEdit(bot, genMsg.chat.id, genMsg.message_id, `Failed: ${r.message}\nIf not connected, run /connect first.`);
       return;
     }
+
+    await safeEdit(bot, genMsg.chat.id, genMsg.message_id, 'Done ✅');
 
     await replyWithMediaAndLinks({
       bot,
