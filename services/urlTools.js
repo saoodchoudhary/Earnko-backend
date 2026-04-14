@@ -59,8 +59,6 @@ function cleanupTrailingUrlJunk(inputUrl) {
   let s = String(inputUrl).trim();
   while (s.endsWith('#')) s = s.slice(0, -1);
   while (s.endsWith('?') || s.endsWith('&')) s = s.slice(0, -1);
-  // remove trailing punctuation commonly copied from chats
-  s = s.replace(/[)\],.]+$/g, '');
   return s;
 }
 
@@ -134,8 +132,6 @@ function isHttpUrl(url) {
   }
 }
 
-// ==================== FINAL URL RESOLVER =====================
-
 /**
  * - Non-shortener hosts: return instantly (no network).
  * - Shortener hosts: resolves redirects via GET (fallback HEAD), with timeout.
@@ -184,9 +180,9 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
 }
 
 /**
- * ✅ NEW: Deep resolver for multi-hop shorteners (earnko -> /r -> store)
+ * ✅ Deep resolver for multi-hop shorteners (earnko -> /r -> /api/affiliate/redirect -> store)
  */
-async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 4 } = {}) {
+async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 6 } = {}) {
   let current = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
   if (!current) return '';
 
@@ -196,7 +192,6 @@ async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 4 } =
     if (next === current) return next;
 
     const host = normalizeHost(next);
-    // stop once we reach non-shortener host
     if (!isShortenerHost(host)) return next;
 
     current = next;

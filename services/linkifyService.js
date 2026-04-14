@@ -12,7 +12,7 @@ const { resolveStoreByUrl } = require('./storeResolver');
 const {
   normalizeAffiliateInputUrl,
   toCanonicalUrl,
-  resolveFinalUrlDeep, // ✅ use deep
+  resolveFinalUrlDeep, // ✅ IMPORTANT
   makeProviderSafeUrl
 } = require('./urlTools');
 
@@ -224,7 +224,6 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
     return { provider: net, resolvedStoreId: storeId };
   }
 
-  // ✅ IMPORTANT: store inference uses the FINAL resolved URL (multi-hop)
   const inferred = await resolveStoreByUrl(providerSafeUrl || resolvedUrl || cleaned);
   if (!inferred?._id) {
     const err = new Error('Store not found for this URL. Please check store baseUrl/trackingUrl mapping.');
@@ -257,8 +256,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  // ✅ MAIN FIX: multi-hop resolve so earnko.com/<code> becomes final merchant URL
-  const resolvedRaw = await resolveFinalUrlDeep(cleaned, { timeoutMs: 2500, maxHops: 4 });
+  // ✅ FIX: deep resolve for earnko.com/<code> (it redirects to /r/:code then /api/affiliate/redirect/:slug then merchant)
+  const resolvedRaw = await resolveFinalUrlDeep(cleaned, { timeoutMs: 2500, maxHops: 6 });
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
