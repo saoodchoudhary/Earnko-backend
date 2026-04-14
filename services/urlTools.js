@@ -5,9 +5,24 @@ if (!fetchFn) {
 
 // ====== Shortener host list and check util (for fast deeplink optimization) =======
 const SHORTENER_HOSTS = [
-  'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to', 'tinyurl.com', 'zngy.in',
-  'ajioapps.onelink.me', 'ajio.page.link', 'myntr.it', 'hyyzo.com', 'fpkrt.cc', 'extp.in'
+  // common shorteners
+  't.co', 'bit.ly', 'bitly.com', 'tinyurl.com', 'cutt.ly', 'rb.gy', 's.id', 'tiny.cc', 'rebrand.ly',
+
+  // india/affiliate/app shorteners
+  'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to',
+  'zngy.in', 'myntr.it', 'hyyzo.com', 'fpkrt.cc',
+  'ajioapps.onelink.me', 'ajio.page.link',
+
+  // extrape short
+  'extp.in',
+
+  // earnkaro (common)
+  'earnkaro.com', 'ekaro.in',
+
+  // earnko itself (so our own short links can be re-processed)
+  'earnko.com'
 ];
+
 function isShortenerHost(host) {
   host = (host || '').toLowerCase();
   return SHORTENER_HOSTS.some(h => host === h || host.endsWith('.' + h));
@@ -40,29 +55,28 @@ function toCanonicalUrl(inputUrl) {
  * Fix common pasted URL issues that break merchant deeplinks.
  */
 function cleanupTrailingUrlJunk(inputUrl) {
-  if (!inputUrl) return '';
-  let s = String(inputUrl).trim();
-  while (s.endsWith('#')) s = s.slice(0, -1);
-  while (s.endsWith('?') || s.endsWith('&')) s = s.slice(0, -1);
+  if (!inputUrl) return inputUrl;
+  let s = String(inputUrl);
+  // remove trailing punctuation commonly copied from chats
+  s = s.replace(/[)\],.]+$/g, '');
   return s;
 }
 
 function toMerchantSafeUrl(inputUrl) {
-  const cleaned = cleanupTrailingUrlJunk(inputUrl);
-  if (!cleaned) return '';
+  if (!inputUrl) return '';
   try {
-    const u = new URL(cleaned);
-    if (u.search === '?') u.search = '';
-    return cleanupTrailingUrlJunk(u.toString());
+    const u = new URL(inputUrl);
+    // drop utm_source etc? (keep as-is for now; you already do providerSafe later)
+    return u.toString();
   } catch {
-    return cleanupTrailingUrlJunk(cleaned);
+    return inputUrl;
   }
 }
 
 function normalizeAffiliateInputUrl(input) {
-  const cleaned = sanitizePastedUrl(input);
-  if (!cleaned) return '';
-  return toMerchantSafeUrl(toCanonicalUrl(cleaned));
+  const s = cleanupTrailingUrlJunk(sanitizePastedUrl(input));
+  if (!s) return '';
+  return toCanonicalUrl(s);
 }
 
 function normalizeHost(inputUrl) {
@@ -121,13 +135,15 @@ function isHttpUrl(url) {
 
 /**
  * - Non-shortener hosts (like www.flipkart.com): returns canonical, cleaned, instantly, no network.
- * - Shortener/app hosts (like fkrt.it, ajio.page.link, etc): tries to resolve via GET then HEAD, timeout 2s max.
+ * - Shortener/app hosts (like fkrt.it, ajio.page.link, earnko.com, etc): tries to resolve via GET then HEAD, timeout 2s max.
  * - On resolve error/timeout, falls back to canonical URL instantly, never hangs.
  */
 async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
+
   let host = '';
   try { host = new URL(inputUrl).hostname.toLowerCase().replace(/^www\./, ''); } catch {}
+
   // Direct merchant/product url: return instantly
   if (!isShortenerHost(host)) return toMerchantSafeUrl(inputUrl);
 
@@ -140,38 +156,65 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
 
   try {
     // Try GET
-    const res = await fetchFn(inputUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: ctrl.signal,
-      headers
-    });
-    return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
-  } catch {
-    // Try HEAD fallback
     try {
-      const res2 = await fetchFn(inputUrl, {
-        method: 'HEAD',
+      const res = await fetchFn(inputUrl, {
+        method: 'GET',
         redirect: 'follow',
         signal: ctrl.signal,
         headers
       });
-      return res2?.url ? toMerchantSafeUrl(res2.url) : toMerchantSafeUrl(inputUrl);
+      return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
     } catch {
-      return toMerchantSafeUrl(inputUrl);
+      // Try HEAD fallback
+      try {
+        const res2 = await fetchFn(inputUrl, {
+          method: 'HEAD',
+          redirect: 'follow',
+          signal: ctrl.signal,
+          headers
+        });
+        return res2?.url ? toMerchantSafeUrl(res2.url) : toMerchantSafeUrl(inputUrl);
+      } catch {
+        return toMerchantSafeUrl(inputUrl);
+      }
     }
   } finally {
     clearTimeout(timer);
   }
 }
 
+/**
+ * NEW: Resolve multiple hops for shorteners (including earnko.com).
+ * Sometimes first resolve returns another shortener (bitly -> earnko -> store).
+ * We'll follow up to `maxHops` times OR stop when host is not shortener.
+ */
+async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 3 } = {}) {
+  let current = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
+  for (let i = 0; i < maxHops; i += 1) {
+    const next = await resolveFinalUrl(current, { timeoutMs });
+    if (!next || next === current) return next || current;
+
+    const host = normalizeHost(next);
+    // stop if next is not a shortener
+    if (!isShortenerHost(host)) return next;
+
+    current = next;
+  }
+  return current;
+}
+
 module.exports = {
   sanitizePastedUrl,
   toCanonicalUrl,
   normalizeAffiliateInputUrl,
+  normalizeHost,
   normalizeMyntraUrl,
   makeProviderSafeUrl,
   resolveFinalUrl,
+
+  // NEW export
+  resolveFinalUrlDeep,
+
   // for custom logic/testing
   toMerchantSafeUrl,
   cleanupTrailingUrlJunk,
