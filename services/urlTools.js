@@ -55,28 +55,31 @@ function toCanonicalUrl(inputUrl) {
  * Fix common pasted URL issues that break merchant deeplinks.
  */
 function cleanupTrailingUrlJunk(inputUrl) {
-  if (!inputUrl) return inputUrl;
-  let s = String(inputUrl);
+  if (!inputUrl) return '';
+  let s = String(inputUrl).trim();
+  while (s.endsWith('#')) s = s.slice(0, -1);
+  while (s.endsWith('?') || s.endsWith('&')) s = s.slice(0, -1);
   // remove trailing punctuation commonly copied from chats
   s = s.replace(/[)\],.]+$/g, '');
   return s;
 }
 
 function toMerchantSafeUrl(inputUrl) {
-  if (!inputUrl) return '';
+  const cleaned = cleanupTrailingUrlJunk(inputUrl);
+  if (!cleaned) return '';
   try {
-    const u = new URL(inputUrl);
+    const u = new URL(cleaned);
     if (u.search === '?') u.search = '';
     return cleanupTrailingUrlJunk(u.toString());
   } catch {
-    return cleanupTrailingUrlJunk(String(inputUrl));
+    return cleanupTrailingUrlJunk(cleaned);
   }
 }
 
 function normalizeAffiliateInputUrl(input) {
-  const s = cleanupTrailingUrlJunk(sanitizePastedUrl(input));
-  if (!s) return '';
-  return toMerchantSafeUrl(toCanonicalUrl(s));
+  const cleaned = sanitizePastedUrl(input);
+  if (!cleaned) return '';
+  return toMerchantSafeUrl(toCanonicalUrl(cleaned));
 }
 
 function normalizeHost(inputUrl) {
@@ -86,37 +89,6 @@ function normalizeHost(inputUrl) {
   } catch {
     return '';
   }
-}
-
-/**
- * NEW: Normalize/alias hosts so Store detection works even if resolved URL lands on alternate domains.
- * Example: dl.flipkart.com -> flipkart.com
- */
-function normalizeStoreHost(host) {
-  const h = String(host || '').toLowerCase().replace(/^www\./, '').trim();
-  if (!h) return '';
-
-  // Flipkart variants
-  if (h === 'dl.flipkart.com') return 'flipkart.com';
-  if (h.endsWith('.flipkart.com')) return 'flipkart.com';
-
-  // Myntra short domain
-  if (h === 'myntr.it') return 'myntra.com';
-
-  // Ajio app/short domains
-  if (h === 'ajioapps.onelink.me' || h === 'ajio.page.link') return 'ajio.com';
-  if (h.endsWith('.onelink.me')) return 'ajio.com';
-
-  // Shopsy sometimes has subdomains
-  if (h.endsWith('.shopsy.in')) return 'shopsy.in';
-
-  // Earnko short domain stays as earnko.com (storeResolver should ignore it by using resolved final URL)
-  return h;
-}
-
-function normalizeUrlToStoreHost(url) {
-  const host = normalizeHost(url);
-  return normalizeStoreHost(host);
 }
 
 // ======= Platform-specific normalization: Myntra Example =========
@@ -162,15 +134,17 @@ function isHttpUrl(url) {
   }
 }
 
-// ==================== ULTRA-FAST FINAL URL RESOLVER =====================
+// ==================== FINAL URL RESOLVER =====================
 
+/**
+ * - Non-shortener hosts: return instantly (no network).
+ * - Shortener hosts: resolves redirects via GET (fallback HEAD), with timeout.
+ */
 async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
-
   let host = '';
   try { host = new URL(inputUrl).hostname.toLowerCase().replace(/^www\./, ''); } catch {}
 
-  // Direct merchant/product url: return instantly
   if (!isShortenerHost(host)) return toMerchantSafeUrl(inputUrl);
 
   const ctrl = new AbortController();
@@ -181,6 +155,7 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   };
 
   try {
+    // Try GET
     try {
       const res = await fetchFn(inputUrl, {
         method: 'GET',
@@ -190,6 +165,7 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
       });
       return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
     } catch {
+      // Try HEAD fallback
       try {
         const res2 = await fetchFn(inputUrl, {
           method: 'HEAD',
@@ -207,17 +183,25 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   }
 }
 
-async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 3 } = {}) {
+/**
+ * ✅ NEW: Deep resolver for multi-hop shorteners (earnko -> /r -> store)
+ */
+async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 4 } = {}) {
   let current = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
+  if (!current) return '';
+
   for (let i = 0; i < maxHops; i += 1) {
     const next = await resolveFinalUrl(current, { timeoutMs });
-    if (!next || next === current) return next || current;
+    if (!next) return current;
+    if (next === current) return next;
 
     const host = normalizeHost(next);
+    // stop once we reach non-shortener host
     if (!isShortenerHost(host)) return next;
 
     current = next;
   }
+
   return current;
 }
 
@@ -226,16 +210,10 @@ module.exports = {
   toCanonicalUrl,
   normalizeAffiliateInputUrl,
   normalizeHost,
-
-  // ✅ NEW exports (used by storeResolver)
-  normalizeStoreHost,
-  normalizeUrlToStoreHost,
-
   normalizeMyntraUrl,
   makeProviderSafeUrl,
   resolveFinalUrl,
   resolveFinalUrlDeep,
-
   // for custom logic/testing
   toMerchantSafeUrl,
   cleanupTrailingUrlJunk,
