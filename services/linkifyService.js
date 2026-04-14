@@ -9,12 +9,7 @@ const ShortUrl = require('../models/ShortUrl');
 const Store = require('../models/Store');
 
 const { resolveStoreByUrl } = require('./storeResolver');
-const {
-  normalizeAffiliateInputUrl,
-  toCanonicalUrl,
-  resolveFinalUrlDeep, // ✅ IMPORTANT
-  makeProviderSafeUrl
-} = require('./urlTools');
+const { normalizeAffiliateInputUrl, toCanonicalUrl, resolveFinalUrl, makeProviderSafeUrl } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
   try {
@@ -65,6 +60,8 @@ function publicSiteBase() {
   return (process.env.PUBLIC_SITE_URL || process.env.FRONTEND_URL || 'https://earnko.com').replace(/\/+$/, '');
 }
 function buildPublicShortUrl(code) {
+  // Option 1: https://earnko.com/<code>
+  // (root rewrite is handled at hosting/frontend level)
   return `${publicSiteBase()}/${code}`;
 }
 
@@ -157,6 +154,7 @@ function looksLikeHome(url) {
     if (path === '' || path === '/') return true;
 
     const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    // For big stores, short links sometimes resolve to home/category; treat shallow paths as "not product"
     if ((host === 'flipkart.com' || host.endsWith('.flipkart.com')) && path.split('/').filter(Boolean).length <= 1) return true;
     if ((host === 'shopsy.in' || host.endsWith('.shopsy.in')) && path.split('/').filter(Boolean).length <= 1) return true;
     if ((host === 'ajio.com' || host.endsWith('.ajio.com')) && path.split('/').filter(Boolean).length <= 1) return true;
@@ -167,6 +165,10 @@ function looksLikeHome(url) {
   }
 }
 
+/**
+ * Decide what to pass as landing page to RealCash.
+ * If resolved/providerSafe becomes homepage-ish, use the original cleaned URL (usually product link).
+ */
 function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
   const candidate = providerSafeUrl || resolvedUrl || cleaned;
   if (!candidate) return cleaned;
@@ -178,6 +180,14 @@ function pickRealCashDestination({ cleaned, resolvedUrl, providerSafeUrl }) {
   return candidate;
 }
 
+/**
+ * RealCash deeplink builder uses configurable param names.
+ * Env:
+ *   REALCASH_LP_PARAM=url
+ *   REALCASH_SUBID_PARAM=subid
+ *   REALCASH_SUBID1_PARAM=subid1
+ *   REALCASH_SUBID2_PARAM=subid2
+ */
 function buildRealCashDeeplink({ destinationUrl, clickId, slug }) {
   const dest = toCanonicalUrl(destinationUrl);
   const host = normalizeHost(dest);
@@ -213,6 +223,7 @@ function normalizeNetwork(net) {
 }
 
 async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cleaned }) {
+  // 1) storeId => always take store's affiliateNetwork
   if (storeId) {
     const store = await Store.findById(storeId).select('affiliateNetwork').lean();
     const net = normalizeNetwork(store?.affiliateNetwork);
@@ -224,6 +235,7 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
     return { provider: net, resolvedStoreId: storeId };
   }
 
+  // 2) No storeId => infer store from URL => must exist in strict mode
   const inferred = await resolveStoreByUrl(providerSafeUrl || resolvedUrl || cleaned);
   if (!inferred?._id) {
     const err = new Error('Store not found for this URL. Please check store baseUrl/trackingUrl mapping.');
@@ -256,8 +268,7 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  // ✅ FIX: deep resolve for earnko.com/<code> (it redirects to /r/:code then /api/affiliate/redirect/:slug then merchant)
-  const resolvedRaw = await resolveFinalUrlDeep(cleaned, { timeoutMs: 2500, maxHops: 6 });
+  const resolvedRaw = await resolveFinalUrl(cleaned);
   const resolvedUrl = toCanonicalUrl(resolvedRaw);
   const providerSafeUrl = makeProviderSafeUrl(resolvedUrl);
 
