@@ -66,17 +66,17 @@ function toMerchantSafeUrl(inputUrl) {
   if (!inputUrl) return '';
   try {
     const u = new URL(inputUrl);
-    // drop utm_source etc? (keep as-is for now; you already do providerSafe later)
-    return u.toString();
+    if (u.search === '?') u.search = '';
+    return cleanupTrailingUrlJunk(u.toString());
   } catch {
-    return inputUrl;
+    return cleanupTrailingUrlJunk(String(inputUrl));
   }
 }
 
 function normalizeAffiliateInputUrl(input) {
   const s = cleanupTrailingUrlJunk(sanitizePastedUrl(input));
   if (!s) return '';
-  return toCanonicalUrl(s);
+  return toMerchantSafeUrl(toCanonicalUrl(s));
 }
 
 function normalizeHost(inputUrl) {
@@ -86,6 +86,37 @@ function normalizeHost(inputUrl) {
   } catch {
     return '';
   }
+}
+
+/**
+ * NEW: Normalize/alias hosts so Store detection works even if resolved URL lands on alternate domains.
+ * Example: dl.flipkart.com -> flipkart.com
+ */
+function normalizeStoreHost(host) {
+  const h = String(host || '').toLowerCase().replace(/^www\./, '').trim();
+  if (!h) return '';
+
+  // Flipkart variants
+  if (h === 'dl.flipkart.com') return 'flipkart.com';
+  if (h.endsWith('.flipkart.com')) return 'flipkart.com';
+
+  // Myntra short domain
+  if (h === 'myntr.it') return 'myntra.com';
+
+  // Ajio app/short domains
+  if (h === 'ajioapps.onelink.me' || h === 'ajio.page.link') return 'ajio.com';
+  if (h.endsWith('.onelink.me')) return 'ajio.com';
+
+  // Shopsy sometimes has subdomains
+  if (h.endsWith('.shopsy.in')) return 'shopsy.in';
+
+  // Earnko short domain stays as earnko.com (storeResolver should ignore it by using resolved final URL)
+  return h;
+}
+
+function normalizeUrlToStoreHost(url) {
+  const host = normalizeHost(url);
+  return normalizeStoreHost(host);
 }
 
 // ======= Platform-specific normalization: Myntra Example =========
@@ -133,11 +164,6 @@ function isHttpUrl(url) {
 
 // ==================== ULTRA-FAST FINAL URL RESOLVER =====================
 
-/**
- * - Non-shortener hosts (like www.flipkart.com): returns canonical, cleaned, instantly, no network.
- * - Shortener/app hosts (like fkrt.it, ajio.page.link, earnko.com, etc): tries to resolve via GET then HEAD, timeout 2s max.
- * - On resolve error/timeout, falls back to canonical URL instantly, never hangs.
- */
 async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   if (!isHttpUrl(inputUrl)) return inputUrl;
 
@@ -155,7 +181,6 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   };
 
   try {
-    // Try GET
     try {
       const res = await fetchFn(inputUrl, {
         method: 'GET',
@@ -165,7 +190,6 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
       });
       return res?.url ? toMerchantSafeUrl(res.url) : toMerchantSafeUrl(inputUrl);
     } catch {
-      // Try HEAD fallback
       try {
         const res2 = await fetchFn(inputUrl, {
           method: 'HEAD',
@@ -183,11 +207,6 @@ async function resolveFinalUrl(inputUrl, { timeoutMs = 2000 } = {}) {
   }
 }
 
-/**
- * NEW: Resolve multiple hops for shorteners (including earnko.com).
- * Sometimes first resolve returns another shortener (bitly -> earnko -> store).
- * We'll follow up to `maxHops` times OR stop when host is not shortener.
- */
 async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 3 } = {}) {
   let current = toMerchantSafeUrl(toCanonicalUrl(sanitizePastedUrl(inputUrl)));
   for (let i = 0; i < maxHops; i += 1) {
@@ -195,7 +214,6 @@ async function resolveFinalUrlDeep(inputUrl, { timeoutMs = 2000, maxHops = 3 } =
     if (!next || next === current) return next || current;
 
     const host = normalizeHost(next);
-    // stop if next is not a shortener
     if (!isShortenerHost(host)) return next;
 
     current = next;
@@ -208,11 +226,14 @@ module.exports = {
   toCanonicalUrl,
   normalizeAffiliateInputUrl,
   normalizeHost,
+
+  // ✅ NEW exports (used by storeResolver)
+  normalizeStoreHost,
+  normalizeUrlToStoreHost,
+
   normalizeMyntraUrl,
   makeProviderSafeUrl,
   resolveFinalUrl,
-
-  // NEW export
   resolveFinalUrlDeep,
 
   // for custom logic/testing

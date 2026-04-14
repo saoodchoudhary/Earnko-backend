@@ -1,4 +1,5 @@
 const Store = require('../models/Store');
+const { normalizeStoreHost, normalizeUrlToStoreHost } = require('./urlTools');
 
 function normalizeHost(inputUrl) {
   try {
@@ -29,7 +30,9 @@ function hostMatches(urlHost, storeHost) {
  * This prevents wrong provider selection when multiple stores partially match.
  */
 async function resolveStoreByUrl(url) {
-  const host = normalizeHost(url);
+  // ✅ IMPORTANT: use alias-normalized store host
+  const hostRaw = normalizeHost(url);
+  const host = normalizeStoreHost(hostRaw) || normalizeUrlToStoreHost(url);
   if (!host) return null;
 
   const stores = await Store.find({ isActive: true })
@@ -39,8 +42,12 @@ async function resolveStoreByUrl(url) {
   const candidates = [];
 
   for (const s of stores) {
-    const baseHost = normalizeAnyUrlToHost(s.baseUrl);
-    const trackHost = normalizeAnyUrlToHost(s.trackingUrl);
+    const baseHostRaw = normalizeAnyUrlToHost(s.baseUrl);
+    const trackHostRaw = normalizeAnyUrlToHost(s.trackingUrl);
+
+    // ✅ Normalize store-side hosts too (handles dl.flipkart.com stored etc.)
+    const baseHost = normalizeStoreHost(baseHostRaw);
+    const trackHost = normalizeStoreHost(trackHostRaw);
 
     let matchedHost = '';
 
@@ -56,7 +63,6 @@ async function resolveStoreByUrl(url) {
   candidates.sort((a, b) => {
     const d = (b.matchedHost || '').length - (a.matchedHost || '').length;
     if (d !== 0) return d;
-    // stable fallback
     return String(a.store?.name || '').localeCompare(String(b.store?.name || ''));
   });
 
