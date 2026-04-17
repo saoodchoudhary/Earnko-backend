@@ -31,7 +31,7 @@ function looksLikeShortPath(url) {
     if (u.search) return false; // has query params → likely a real product URL
     const segments = u.pathname.split('/').filter(Boolean);
     if (segments.length !== 1) return false; // must be a single-segment path
-    return /^[A-Za-z0-9_-]{4,16}$/.test(segments[0]);
+    return /^[A-Za-z0-9_-]{3,20}$/.test(segments[0]);
   } catch {
     return false;
   }
