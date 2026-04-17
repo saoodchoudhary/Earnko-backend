@@ -253,12 +253,48 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
   return { provider: net, resolvedStoreId: inferred._id };
 }
 
+/**
+ * If the user pastes one of our own earnko.com short URLs (e.g. https://earnko.com/tXdN5FqF),
+ * look up the original product URL from the database rather than following HTTP redirects
+ * (the frontend SPA does not issue a machine-readable redirect, so HTTP resolution fails).
+ * Returns the original product URL string, or null if not resolvable.
+ */
+async function resolveEarnkoShortUrlToOriginal(inputUrl) {
+  try {
+    const u = new URL(inputUrl);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== 'earnko.com') return null;
+
+    const segments = u.pathname.split('/').filter(Boolean);
+    if (segments.length !== 1) return null;
+
+    const code = segments[0];
+    const row = await ShortUrl.findOne({ code }).lean();
+    if (!row?.clickId) return null;
+
+    const click = await Click.findOne({ clickId: row.clickId })
+      .select('metadata')
+      .lean();
+    const original = click?.metadata?.originalUrl;
+    return original || null;
+  } catch {
+    return null;
+  }
+}
+
 async function createAffiliateLinkStrict({ user, url, storeId = null }) {
-  const cleaned = normalizeAffiliateInputUrl(url);
+  let cleaned = normalizeAffiliateInputUrl(url);
   if (!cleaned) {
     const err = new Error('url required');
     err.code = 'bad_request';
     throw err;
+  }
+
+  // If the user pasted one of our own earnko.com short URLs, resolve it to the
+  // original product URL via DB lookup before doing anything else.
+  const earnkoOriginal = await resolveEarnkoShortUrlToOriginal(cleaned);
+  if (earnkoOriginal) {
+    cleaned = normalizeAffiliateInputUrl(earnkoOriginal);
   }
 
   const inputHost = normalizeHost(cleaned);
