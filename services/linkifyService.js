@@ -120,7 +120,8 @@ function isFlipkartHost(host) {
     host === 'fpkrt.cc' ||
     host === 'zngy.in' ||
     host === 'hyyzo.com' ||
-    host === 'extp.in'
+    host === 'extp.in' ||
+    host === 'bitlii.com'
   );
 }
 
