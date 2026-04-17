@@ -6,7 +6,7 @@ if (!fetchFn) {
 // ====== Shortener host list and check util (for fast deeplink optimization) =======
 const SHORTENER_HOSTS = [
   // Flipkart shorteners
-  'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to', 'fpkrt.cc', 'zngy.in', 'hyyzo.com', 'extp.in',
+  'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to', 'fpkrt.cc', 'zngy.in', 'hyyzo.com', 'extp.in', 'bitlii.com',
   // Flipkart deep-link domain (app deep-links that use JS redirect to the web URL)
   'dl.flipkart.com',
   // App/deep-link shorteners

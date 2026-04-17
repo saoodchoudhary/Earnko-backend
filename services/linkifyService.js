@@ -120,7 +120,8 @@ function isFlipkartHost(host) {
     host === 'fpkrt.cc' ||
     host === 'zngy.in' ||
     host === 'hyyzo.com' ||
-    host === 'extp.in'
+    host === 'extp.in' ||
+    host === 'bitlii.com'
   );
 }
 
@@ -235,8 +236,21 @@ async function resolveProviderStrict({ storeId, providerSafeUrl, resolvedUrl, cl
     return { provider: net, resolvedStoreId: storeId };
   }
 
-  // 2) No storeId => infer store from URL => must exist in strict mode
-  const inferred = await resolveStoreByUrl(providerSafeUrl || resolvedUrl || cleaned);
+  // 2) No storeId => infer store from URL => must exist in strict mode.
+  // Try each URL candidate individually (most-resolved first) so that:
+  // - A store whose baseUrl is 'flipkart.com' is found when providerSafeUrl is
+  //   the resolved Flipkart product URL.
+  // - A store whose baseUrl/trackingUrl matches the original short-link host
+  //   (e.g. 'fktr.in') is still found when redirect resolution timed out and
+  //   providerSafeUrl is still the shortener URL.
+  // - The SHORTENER_CANONICAL_MAP in storeResolver handles the case where
+  //   resolution failed AND the store only has the canonical domain configured.
+  let inferred = null;
+  for (const tryUrl of [providerSafeUrl, resolvedUrl, cleaned].filter(Boolean)) {
+    // eslint-disable-next-line no-await-in-loop
+    inferred = await resolveStoreByUrl(tryUrl);
+    if (inferred?._id) break;
+  }
   if (!inferred?._id) {
     const err = new Error('Store not found for this URL. Please check store baseUrl/trackingUrl mapping.');
     err.code = 'store_not_found_for_url';
