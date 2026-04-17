@@ -38,7 +38,7 @@ const SHORTENER_CANONICAL_MAP = {
   'zngy.in':        'flipkart.com',
   'hyyzo.com':      'flipkart.com',
   'extp.in':        'flipkart.com',
-  'dl.flipkart.com':'flipkart.com',
+  'dl.flipkart.com': 'flipkart.com',
   // Myntra short-link domain
   'myntr.it':       'myntra.com',
 };
