@@ -40,6 +40,8 @@ const SHORTENER_CANONICAL_MAP = {
   'extp.in':        'flipkart.com',
   'bitlii.com':     'flipkart.com',
   'dl.flipkart.com': 'flipkart.com',
+  // Shopsy short-link domains (Flipkart's social-commerce platform)
+  'bitli.in':       'shopsy.in',
   // Myntra short-link domain
   'myntr.it':       'myntra.com',
 };

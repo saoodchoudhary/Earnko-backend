@@ -9,6 +9,8 @@ const SHORTENER_HOSTS = [
   'fkrt.it', 'fkrt.cc', 'fktr.in', 'fkrt.to', 'fpkrt.cc', 'zngy.in', 'hyyzo.com', 'extp.in', 'bitlii.com',
   // Flipkart deep-link domain (app deep-links that use JS redirect to the web URL)
   'dl.flipkart.com',
+  // Shopsy shorteners (Flipkart's social-commerce platform)
+  'bitli.in',
   // App/deep-link shorteners
   'ajioapps.onelink.me', 'ajio.page.link', 'myntr.it',
   // Generic shorteners
