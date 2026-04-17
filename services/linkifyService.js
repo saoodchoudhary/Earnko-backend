@@ -294,7 +294,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
   // original product URL via DB lookup before doing anything else.
   const earnkoOriginal = await resolveEarnkoShortUrlToOriginal(cleaned);
   if (earnkoOriginal) {
-    cleaned = normalizeAffiliateInputUrl(earnkoOriginal);
+    const resolvedCleaned = normalizeAffiliateInputUrl(earnkoOriginal);
+    if (resolvedCleaned) cleaned = resolvedCleaned;
   }
 
   const inputHost = normalizeHost(cleaned);
