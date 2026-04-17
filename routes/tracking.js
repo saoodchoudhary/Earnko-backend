@@ -10,6 +10,7 @@ const Click = require('../models/Click');
 const { buildDeeplink: buildCuelinksDeeplink } = require('../services/cuelinks');
 const trackier = require('../services/affiliateNetwork/trackier');
 const extrape = require('../services/affiliateNetwork/extrape');
+const { SHORTENER_CANONICAL_MAP } = require('../services/storeResolver');
 
 const router = express.Router();
 
@@ -43,20 +44,17 @@ function isDotAndKeyHost(host) {
 }
 
 function isFlipkartHost(host) {
-  return (
+  if (
     host === 'flipkart.com' ||
     host.endsWith('.flipkart.com') ||
-    host === 'dl.flipkart.com' ||
-    host === 'fkrt.it' ||
-    host === 'fkrt.cc' ||
-    host === 'fktr.in' ||
-    host === 'fkrt.to' ||
-    host === 'fpkrt.cc' ||
-    host === 'zngy.in' ||
-    host === 'hyyzo.com' ||
-    host === 'extp.in' ||
-    host === 'bitlii.com'
-  );
+    host === 'dl.flipkart.com'
+  ) return true;
+  return SHORTENER_CANONICAL_MAP[host] === 'flipkart.com';
+}
+
+function isShopsyHost(host) {
+  if (host === 'shopsy.in' || host.endsWith('.shopsy.in')) return true;
+  return SHORTENER_CANONICAL_MAP[host] === 'shopsy.in';
 }
 
 function getTrackierCampaignId(url) {
@@ -73,10 +71,11 @@ function getTrackierCampaignId(url) {
 function isRealCashTrackingHost(host) {
   return host === 'track.realcash.in' || host.endsWith('.realcash.in');
 }
-function getRealCashBaseForHost(host) {
+function getRealCashBaseForHost(host, _visited = new Set()) {
   if (host === 'ajio.com' || host.endsWith('.ajio.com')) return process.env.REALCASH_AJIO_BASE || '';
   if (host === 'myntra.com' || host.endsWith('.myntra.com') || host === 'myntr.it') return process.env.REALCASH_MYNTRA_BASE || '';
-  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || ''; // ✅ ADDED
+  if (isFlipkartHost(host)) return process.env.REALCASH_FLIPKART_BASE || '';
+  if (isShopsyHost(host)) return process.env.REALCASH_SHOPSY_BASE || '';
   if (host === 'dotandkey.com' || host.endsWith('.dotandkey.com')) return process.env.REALCASH_DOTANDKEY_BASE || '';
   if (host === 'croma.com' || host.endsWith('.croma.com')) return process.env.REALCASH_CROMA_BASE || '';
   if (host === 'mcaffeine.com' || host.endsWith('.mcaffeine.com')) return process.env.REALCASH_MCAFFEINE_BASE || '';
@@ -87,6 +86,14 @@ function getRealCashBaseForHost(host) {
   }
   if (host === 'boat-lifestyle.com' || host.endsWith('.boat-lifestyle.com') || host === 'boatlifestyle.com' || host.endsWith('.boatlifestyle.com')) {
     return process.env.REALCASH_BOAT_BASE || '';
+  }
+  // For any shortener/alias domain not matched above, resolve to its canonical merchant
+  // host via SHORTENER_CANONICAL_MAP and retry.  Adding a new shortener to the map
+  // automatically propagates to all provider base-link lookups here.
+  const canonical = SHORTENER_CANONICAL_MAP[host];
+  if (canonical && canonical !== host && !_visited.has(canonical)) {
+    _visited.add(host);
+    return getRealCashBaseForHost(canonical, _visited);
   }
   return '';
 }
