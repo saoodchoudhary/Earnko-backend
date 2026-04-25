@@ -83,6 +83,8 @@ app.use('/api/admin/products', require('./routes/admin/products'));
 // NEW: store profit rates (category-wise)
 app.use('/api/stores', require('./routes/storeProfitRates'));
 
+app.use('/api/stats', require('./routes/stats'));
+
 // User-scoped
 app.use('/api/user/profile', require('./routes/user/profile'));
 app.use('/api/user/clicks', require('./routes/user/clicks'));
