@@ -4,7 +4,7 @@ const User = require('../models/User');
 const Click = require('../models/Click');
 const { createAffiliateLinkStrict } = require('../services/linkifyService');
 const { SHORTENER_CANONICAL_MAP } = require('../services/storeResolver');
-const shortid = require('shortid');
+const { nanoid } = require('nanoid');
 
 const trackier = require('../services/affiliateNetwork/trackier');
 const extrape = require('../services/affiliateNetwork/extrape');
@@ -200,7 +200,7 @@ router.get('/redirect/:slug', async (req, res) => {
 
     if (!destinationUrl) return res.redirect(process.env.FRONTEND_URL || '/');
 
-    const clickId = shortid.generate();
+    const clickId = nanoid();
 
     await Click.create({
       clickId,

@@ -4,8 +4,11 @@ const WebhookEvent = require('../../models/WebhookEvent');
 const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
+const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
+
+const MAX_COMMISSION = 50000; // ₹50,000 sanity cap
 
 function parseNumber(v, def = 0) {
   const n = Number(v);
@@ -80,7 +83,7 @@ function normalizePayload(req) {
  * Recommended Trackier postback URL:
  *   https://YOUR_DOMAIN.com/api/webhooks/trackier?click_id={click_id}&txn_id={txn_id}&sale_amount={sale_amount}&payout={payout}&currency={currency}&conversion_status={conversion_status}&campaign_id={campaign_id}&p1={p1}
  */
-router.all('/', async (req, res) => {
+router.all('/', makeWebhookAuth('TRACKIER_WEBHOOK_SECRET'), async (req, res) => {
   const { payload, clickId, txnId, saleAmount, payout, currency, status, campaignId, p1 } = normalizePayload(req);
 
   const event = await WebhookEvent.create({
@@ -96,6 +99,14 @@ router.all('/', async (req, res) => {
     if (!clickId || !txnId) {
       await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing click_id or txn_id' });
       return res.status(400).json({ success: false, message: 'Missing click_id or txn_id' });
+    }
+
+    // Validate commission amount: reject negative values and unreasonably large amounts.
+    // Zero is intentionally allowed — providers legitimately send payout=0 for
+    // pending/tracking-only callbacks before the actual payout is calculated.
+    if (payout < 0 || payout > MAX_COMMISSION) {
+      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Payout amount out of allowed range' });
+      return res.status(400).json({ success: false, message: 'Payout amount out of allowed range' });
     }
 
     // Map clickId -> Click -> user/store

@@ -5,14 +5,17 @@ const User = require('../../models/User');
 const Click = require('../../models/Click');
 const WebhookEvent = require('../../models/WebhookEvent');
 const { creditOnApprovedTransaction, reverseOnRejection } = require('../../services/referralService');
+const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
+
+const MAX_COMMISSION = 50000; // ₹50,000 sanity cap
 
 /**
  * Cuelinks Postback/Webhook
  * Keys: subid, order_id, sale_amount, commission, status
  */
-router.all('/', async (req, res) => {
+router.all('/', makeWebhookAuth('CUELINKS_WEBHOOK_SECRET'), async (req, res) => {
     const payload = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
 
     const event = await WebhookEvent.create({
@@ -35,6 +38,14 @@ router.all('/', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing subid or order_id' });
         }
 
+        // Validate commission amount: reject negative values and unreasonably large amounts.
+        // Zero is intentionally allowed — providers legitimately send commission=0 for
+        // pending/tracking-only callbacks before the actual payout is calculated.
+        if (commission < 0 || commission > MAX_COMMISSION) {
+            await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Commission amount out of allowed range' });
+            return res.status(400).json({ success: false, message: 'Commission amount out of allowed range' });
+        }
+
         // Map status from Cuelinks:
         let status = 'pending';
         if (['confirmed', 'approved', 'valid', 'paid'].includes(statusRaw)) status = 'confirmed'; // was: 'approved'
@@ -42,16 +53,11 @@ router.all('/', async (req, res) => {
 
         // Find click by clickId (subid) => user + store
         const click = await Click.findOne({ clickId: subid }).lean();
-        let userId = click?.user || null;
+        const userId = click?.user || null;
         const storeId = click?.store || null;
 
-        // Fallback: parse subid pattern u<userId>-<random>
-        if (!userId && typeof subid === 'string') {
-            const m = /^u([a-f0-9]{24})-/i.exec(subid);
-            if (m && mongoose.Types.ObjectId.isValid(m[1])) {
-                userId = new mongoose.Types.ObjectId(m[1]);
-            }
-        }
+        // NOTE: intentionally no userId fallback from subid pattern — such a fallback
+        // would allow anyone knowing a user ObjectId to inject wallet credits.
 
         // Upsert transaction by orderId
         let tx = await Transaction.findOne({ orderId });
@@ -112,9 +118,9 @@ router.all('/', async (req, res) => {
         }
 
         // Referral: credit on approved; reverse if previously approved -> now rejected
-        if (status === 'approved') {
+        if (status === 'confirmed') {
             try { await creditOnApprovedTransaction(tx._id); } catch (e) { console.warn('referral credit error', e?.message); }
-        } else if (prevStatus === 'approved' && status === 'rejected') {
+        } else if (prevStatus === 'confirmed' && status === 'cancelled') {
             try { await reverseOnRejection(tx._id); } catch (e) { console.warn('referral reverse error', e?.message); }
         }
 

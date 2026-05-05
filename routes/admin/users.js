@@ -7,6 +7,10 @@ const AffiliatePayout = require('../../models/AffiliatePayout');
 
 const router = express.Router();
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * GET /api/admin/users
  * Query: page, limit, q (name/email), role, status
@@ -25,8 +29,8 @@ router.get('/', adminAuth, async (req, res) => {
     const filter = {};
     if (q) {
       filter.$or = [
-        { name: new RegExp(q, 'i') },
-        { email: new RegExp(q, 'i') },
+        { name: new RegExp(escapeRegex(q), 'i') },
+        { email: new RegExp(escapeRegex(q), 'i') },
       ];
     }
     if (role && role !== 'all') filter.role = role;

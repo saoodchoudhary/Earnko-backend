@@ -4,8 +4,11 @@ const WebhookEvent = require('../../models/WebhookEvent');
 const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
+const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
+
+const MAX_COMMISSION = 50000; // ₹50,000 sanity cap
 
 function parseNumber(v, def = 0) {
   const n = Number(v);
@@ -69,7 +72,7 @@ function normalizePayload(req) {
 }
 
 /**
- * Extrape Postback Handler (NO SECURITY)
+ * Extrape Postback Handler
  * Endpoint: /api/webhooks/extrape
  *
  * Recommended params:
@@ -79,7 +82,7 @@ function normalizePayload(req) {
  *  - commission
  *  - status (approved/cancelled/pending)
  */
-router.all('/', async (req, res) => {
+router.all('/', makeWebhookAuth('EXTRAPE_WEBHOOK_SECRET'), async (req, res) => {
   const { payload, subid, orderId, saleAmount, commission, status, currency } = normalizePayload(req);
 
   const event = await WebhookEvent.create({
@@ -94,6 +97,14 @@ router.all('/', async (req, res) => {
     if (!subid || !orderId) {
       await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Missing subid or order_id' });
       return res.status(400).json({ success: false, message: 'Missing subid or order_id' });
+    }
+
+    // Validate commission amount: reject negative values and unreasonably large amounts.
+    // Zero is intentionally allowed — providers legitimately send commission=0 for
+    // pending/tracking-only callbacks before the actual payout is calculated.
+    if (commission < 0 || commission > MAX_COMMISSION) {
+      await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Commission amount out of allowed range' });
+      return res.status(400).json({ success: false, message: 'Commission amount out of allowed range' });
     }
 
     // Map subid -> Click -> user/store
