@@ -7,11 +7,33 @@ const Product = require('../models/Product');
 const router = express.Router();
 
 /**
+ * Middleware: verify shared webhook secret.
+ * Callers must supply the secret via:
+ *   - HTTP header:  X-Webhook-Secret: <secret>
+ *   - Query param:  ?secret=<secret>
+ * Set WEBHOOK_SECRET in your environment variables.
+ */
+function requireWebhookSecret(req, res, next) {
+  const secret = process.env.WEBHOOK_SECRET;
+  if (!secret) {
+    // If no secret is configured, block all requests to prevent accidental exposure.
+    console.error('[webhook] WEBHOOK_SECRET env variable is not set – refusing request');
+    return res.status(503).json({ success: false, message: 'Webhook not configured' });
+  }
+  const provided = req.headers['x-webhook-secret'] || req.query.secret;
+  if (!provided || provided !== secret) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  next();
+}
+
+/**
  * Generic conversion webhook
  * Accepts: userId, orderId, amount, commission, storeId?, productId?, clickId?
  * If productId present, prefer product.store as storeId, and store productId/categoryKey in trackingData.
+ * Requires header: X-Webhook-Secret or query param: secret
  */
-router.post('/conversion', async (req, res) => {
+router.post('/conversion', requireWebhookSecret, async (req, res) => {
   const event = await WebhookEvent.create({
     source: req.query.source || 'generic',
     eventType: 'conversion',
