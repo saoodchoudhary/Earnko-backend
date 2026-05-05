@@ -10,7 +10,7 @@ const Product = require('../models/Product');
 
 const router = express.Router();
 
-const MAX_COMMISSION = 50000; // ₹50,000 sanity cap — matches provider-specific webhooks
+const MAX_COMMISSION = 50000; // ₹50,000 sanity cap — same limit used in routes/webhooks/{cuelinks,extrape,realcash,trackier}.js
 
 function parseStrictNumber(v) {
   if (v === undefined || v === null || v === '') return null;
@@ -124,7 +124,7 @@ router.post('/conversion', webhookRateLimit, requireWebhookSecret, async (req, r
     }
 
     // Validate that clickId exists and belongs to this user
-    const click = await Click.findOne({ clickId: String(clickId) }).lean();
+    const click = await Click.findOne({ clickId: String(clickId) }).select('user').lean();
     if (!click) {
       await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'clickId not found' });
       return res.status(404).json({ success: false, message: 'clickId not found' });
