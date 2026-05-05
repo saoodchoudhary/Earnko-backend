@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const rateLimit = require('express-rate-limit');
 
 const Product = require('../models/Product');
 const Store = require('../models/Store');
@@ -13,6 +14,14 @@ const extrape = require('../services/affiliateNetwork/extrape');
 const { SHORTENER_CANONICAL_MAP } = require('../services/storeResolver');
 
 const router = express.Router();
+
+const trackingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later' }
+});
 
 function normalizeHost(inputUrl) {
   try {
@@ -180,7 +189,7 @@ function statusFromCode(code) {
  *
  * If provider link cannot be built, returns JSON error (does NOT fallback redirect).
  */
-router.get('/product/:productId', async (req, res) => {
+router.get('/product/:productId', trackingLimiter, async (req, res) => {
   try {
     const { productId } = req.params;
     if (!mongoose.isValidObjectId(productId)) {

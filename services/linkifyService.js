@@ -362,7 +362,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       slug
     });
 
-    user.affiliateInfo.isAffiliate = true;
     user.affiliateInfo.uniqueLinks.push({
       store: effectiveStoreId,
       customSlug: slug,
@@ -404,7 +403,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       subid: clickId
     });
 
-    user.affiliateInfo.isAffiliate = true;
     user.affiliateInfo.uniqueLinks.push({
       store: effectiveStoreId,
       customSlug: slug,
@@ -438,7 +436,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
       encodeURL: false
     });
 
-    user.affiliateInfo.isAffiliate = true;
     user.affiliateInfo.uniqueLinks.push({
       store: effectiveStoreId,
       customSlug: slug,
@@ -494,7 +491,6 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
     throw err;
   }
 
-  user.affiliateInfo.isAffiliate = true;
   user.affiliateInfo.uniqueLinks.push({
     store: effectiveStoreId,
     customSlug: slug,

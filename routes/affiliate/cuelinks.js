@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const { auth } = require('../../middleware/auth');
+const { requireAnyRole } = require('../../middleware/roles');
 const User = require('../../models/User');
 const { buildDeeplink, getCampaigns } = require('../../services/cuelinks');
 
@@ -24,7 +25,7 @@ const limiter = rateLimit({
  *  - subid: attribution id tied to user
  *  - shareUrl: backend wrapper to record clicks, then redirect to Cuelinks (recommended to share)
  */
-router.post('/deeplink', auth, limiter, async (req, res) => {
+router.post('/deeplink', auth, requireAnyRole(['affiliate', 'admin']), limiter, async (req, res) => {
   try {
     const { url, subid, channel_id, subid2, subid3, subid4, subid5 } = req.body || {};
     if (!url) return res.status(400).json({ success: false, message: 'url required' });
@@ -87,7 +88,7 @@ router.post('/deeplink', auth, limiter, async (req, res) => {
 
 
 // Returns: { results: [{ inputUrl, success, link, shareUrl, subid, message }] }
-router.post('/bulk-deeplink', auth, limiter, async (req, res) => {
+router.post('/bulk-deeplink', auth, requireAnyRole(['affiliate', 'admin']), limiter, async (req, res) => {
   try {
     const { urls } = req.body || {};
     if (!Array.isArray(urls) || urls.length === 0) {
