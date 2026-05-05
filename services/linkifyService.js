@@ -1,4 +1,4 @@
-const shortid = require('shortid');
+const { nanoid } = require('nanoid');
 
 const cuelinks = require('./affiliateNetwork/cuelinks');
 const trackier = require('./affiliateNetwork/trackier');
@@ -66,13 +66,13 @@ function buildPublicShortUrl(code) {
 }
 
 async function createShortCodeForSlug({ slug, userId, provider, destinationUrl, clickId }) {
-  let code = shortid.generate().replace(/_/g, '').replace(/-/g, '').slice(0, 8);
+  let code = nanoid(8).replace(/_/g, '').replace(/-/g, '').slice(0, 8);
 
   for (let i = 0; i < 6; i++) {
     // eslint-disable-next-line no-await-in-loop
     const exists = await ShortUrl.findOne({ code }).lean();
     if (!exists) break;
-    code = shortid.generate().replace(/_/g, '').replace(/-/g, '').slice(0, 8);
+    code = nanoid(8).replace(/_/g, '').replace(/-/g, '').slice(0, 8);
   }
 
   await ShortUrl.create({
@@ -332,8 +332,8 @@ async function createAffiliateLinkStrict({ user, url, storeId = null }) {
 
   const effectiveStoreId = storeId || resolvedStoreId || null;
 
-  const slug = shortid.generate();
-  const clickId = shortid.generate();
+  const slug = nanoid();
+  const clickId = nanoid();
 
   await Click.create({
     clickId,

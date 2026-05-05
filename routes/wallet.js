@@ -1,9 +1,18 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { auth } = require('../middleware/auth');
 const AffiliatePayout = require('../models/AffiliatePayout');
 const User = require('../models/User');
 
 const router = express.Router();
+
+const withdrawLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many withdrawal requests, please try again later' }
+});
 
 // Wallet summary (now includes requestedAmount = sum of pending/approved)
 router.get('/me', auth, async (req, res) => {
@@ -28,7 +37,7 @@ router.get('/me', auth, async (req, res) => {
 });
 
 // Request withdrawal (bank/upi) — consistent with AffiliatePayout schema
-router.post('/withdraw', auth, async (req, res) => {
+router.post('/withdraw', auth, withdrawLimiter, async (req, res) => {
   try {
     const { amount, method = 'bank', upiId, bank } = req.body;
     const amt = Number(amount);

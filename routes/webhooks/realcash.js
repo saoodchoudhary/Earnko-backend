@@ -109,7 +109,9 @@ router.all('/', makeWebhookAuth('REALCASH_WEBHOOK_SECRET'), async (req, res) => 
       return res.status(400).json({ success: false, message: 'Missing order_id' });
     }
 
-    // Validate commission amount
+    // Validate commission amount: reject negative values and unreasonably large amounts.
+    // Zero is intentionally allowed — providers legitimately send commission=0 for
+    // pending/tracking-only callbacks before the actual payout is calculated.
     if (commission < 0 || commission > MAX_COMMISSION) {
       await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Commission amount out of allowed range' });
       return res.status(400).json({ success: false, message: 'Commission amount out of allowed range' });

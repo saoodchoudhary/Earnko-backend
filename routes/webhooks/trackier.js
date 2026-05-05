@@ -101,7 +101,9 @@ router.all('/', makeWebhookAuth('TRACKIER_WEBHOOK_SECRET'), async (req, res) => 
       return res.status(400).json({ success: false, message: 'Missing click_id or txn_id' });
     }
 
-    // Validate commission amount
+    // Validate commission amount: reject negative values and unreasonably large amounts.
+    // Zero is intentionally allowed — providers legitimately send payout=0 for
+    // pending/tracking-only callbacks before the actual payout is calculated.
     if (payout < 0 || payout > MAX_COMMISSION) {
       await WebhookEvent.findByIdAndUpdate(event._id, { status: 'error', error: 'Payout amount out of allowed range' });
       return res.status(400).json({ success: false, message: 'Payout amount out of allowed range' });
