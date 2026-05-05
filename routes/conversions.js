@@ -39,8 +39,8 @@ router.get('/', auth, requireRole('admin'), async (req, res) => {
 // Admin: approve/reject conversion
 router.put('/:id/status', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { status } = req.body; // 'approved' | 'rejected'
-    if (!['approved', 'rejected'].includes(status)) {
+    const { status } = req.body; // 'confirmed' | 'cancelled'
+    if (!['confirmed', 'cancelled'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
 
@@ -53,7 +53,7 @@ router.put('/:id/status', auth, requireRole('admin'), async (req, res) => {
     // Wallet adjustments on approval/rejection
     const delta = Math.abs(Number(tx.commissionAmount || 0));
     if (delta && tx.user) {
-      if (status === 'approved') {
+      if (status === 'confirmed') {
         await User.updateOne(
           { _id: tx.user },
           {
@@ -64,7 +64,7 @@ router.put('/:id/status', auth, requireRole('admin'), async (req, res) => {
             }
           }
         );
-      } else if (status === 'rejected') {
+      } else if (status === 'cancelled') {
         await User.updateOne(
           { _id: tx.user },
           { $inc: { 'wallet.pendingCashback': -delta } }

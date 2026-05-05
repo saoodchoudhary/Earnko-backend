@@ -112,9 +112,9 @@ router.all('/', async (req, res) => {
         }
 
         // Referral: credit on approved; reverse if previously approved -> now rejected
-        if (status === 'approved') {
+        if (status === 'confirmed') {
             try { await creditOnApprovedTransaction(tx._id); } catch (e) { console.warn('referral credit error', e?.message); }
-        } else if (prevStatus === 'approved' && status === 'rejected') {
+        } else if (prevStatus === 'confirmed' && status === 'cancelled') {
             try { await reverseOnRejection(tx._id); } catch (e) { console.warn('referral reverse error', e?.message); }
         }
 

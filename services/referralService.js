@@ -32,7 +32,7 @@ function computeReferralBonus(approvedCommission) {
  */
 async function creditOnApprovedTransaction(transactionId) {
   const tx = await Transaction.findById(transactionId).lean();
-  if (!tx || tx.status !== 'approved' || !tx.user) return null;
+  if (!tx || tx.status !== 'confirmed' || !tx.user) return null;
 
   const referredUser = await User.findById(tx.user).lean();
   const referrerId = referredUser?.referredBy;
