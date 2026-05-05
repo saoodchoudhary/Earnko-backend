@@ -1,5 +1,7 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { auth } = require('../middleware/auth');
+const { requireAnyRole } = require('../middleware/roles');
 const User = require('../models/User');
 const Click = require('../models/Click');
 const { createAffiliateLinkStrict } = require('../services/linkifyService');
@@ -11,6 +13,14 @@ const extrape = require('../services/affiliateNetwork/extrape');
 const { buildDeeplink: buildCuelinksDeeplink } = require('../services/cuelinks');
 
 const router = express.Router();
+
+const linkGenLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many link generation requests, please try again later' }
+});
 
 function normalizeHost(inputUrl) {
   try {
@@ -130,7 +140,7 @@ function statusFromCode(code) {
 }
 
 // Create affiliate link from URL (STRICT)
-router.post('/link-from-url', auth, async (req, res) => {
+router.post('/link-from-url', linkGenLimiter, auth, requireAnyRole(['affiliate', 'admin']), async (req, res) => {
   try {
     const { url, storeId } = req.body;
     if (!url) return res.status(400).json({ success: false, code: 'bad_request', message: 'URL required' });
@@ -151,7 +161,7 @@ router.post('/link-from-url', auth, async (req, res) => {
 });
 
 // BULK
-router.post('/link-from-url/bulk', auth, async (req, res) => {
+router.post('/link-from-url/bulk', linkGenLimiter, auth, requireAnyRole(['affiliate', 'admin']), async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
     const storeId = req.body?.storeId || null;

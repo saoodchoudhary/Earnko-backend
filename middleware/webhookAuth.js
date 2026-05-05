@@ -5,8 +5,8 @@ const crypto = require('crypto');
  * against the value stored in process.env[secretEnvVar].
  *
  * Behaviour:
- *  - If the env var is NOT set: logs a warning and allows the request through
- *    (preserves backward-compat for deployments that haven't configured it yet).
+ *  - If the env var is NOT set: blocks the request with 503. An unconfigured secret
+ *    must never silently allow unauthenticated access to transaction-creating endpoints.
  *  - If the env var IS set and the header is missing or wrong: responds 401.
  *  - Uses crypto.timingSafeEqual to prevent timing-based secret leakage.
  */
@@ -15,8 +15,8 @@ function makeWebhookAuth(secretEnvVar) {
     const secret = process.env[secretEnvVar];
 
     if (!secret) {
-      console.warn(`[webhookAuth] WARNING: ${secretEnvVar} is not set — endpoint is UNPROTECTED`);
-      return next();
+      console.error(`[webhookAuth] ERROR: ${secretEnvVar} is not set — refusing request to prevent unauthorized access`);
+      return res.status(503).json({ success: false, message: 'Webhook not configured' });
     }
 
     const provided = req.headers['x-webhook-secret'];
