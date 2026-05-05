@@ -140,7 +140,7 @@ function statusFromCode(code) {
 }
 
 // Create affiliate link from URL (STRICT)
-router.post('/link-from-url', auth, requireAnyRole(['affiliate', 'admin']), linkGenLimiter, async (req, res) => {
+router.post('/link-from-url', linkGenLimiter, auth, requireAnyRole(['affiliate', 'admin']), async (req, res) => {
   try {
     const { url, storeId } = req.body;
     if (!url) return res.status(400).json({ success: false, code: 'bad_request', message: 'URL required' });
@@ -161,7 +161,7 @@ router.post('/link-from-url', auth, requireAnyRole(['affiliate', 'admin']), link
 });
 
 // BULK
-router.post('/link-from-url/bulk', auth, requireAnyRole(['affiliate', 'admin']), linkGenLimiter, async (req, res) => {
+router.post('/link-from-url/bulk', linkGenLimiter, auth, requireAnyRole(['affiliate', 'admin']), async (req, res) => {
   try {
     const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
     const storeId = req.body?.storeId || null;
