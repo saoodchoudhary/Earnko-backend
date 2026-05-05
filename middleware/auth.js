@@ -1,7 +1,12 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 require('dotenv').config();
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start.');
+  process.exit(1);
+}
 
 async function auth(req, res, next) {
   try {
@@ -10,6 +15,7 @@ async function auth(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.userId);
     if (!user) return res.status(401).json({ success:false, message: 'Invalid token' });
+    if (user.accountStatus === 'blocked') return res.status(401).json({ success:false, message: 'Account blocked' });
     req.user = user;
     next();
   } catch (err) {

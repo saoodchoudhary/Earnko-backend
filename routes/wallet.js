@@ -55,18 +55,24 @@ router.post('/withdraw', auth, async (req, res) => {
     }
 
     const payout = await AffiliatePayout.create({
-      affiliate: req.user._id,  // FIX: field name
+      affiliate: req.user._id,
       amount: amt,
       method,
       methodDetails,
-      status: 'pending'          // FIX: valid enum
+      status: 'pending'
     });
 
-    // Lock funds
-    await User.updateOne(
-      { _id: req.user._id },
+    // Atomic deduction: only succeeds if balance is still sufficient (prevents race condition)
+    const result = await User.updateOne(
+      { _id: req.user._id, 'wallet.availableBalance': { $gte: amt } },
       { $inc: { 'wallet.availableBalance': -amt } }
     );
+
+    if (result.matchedCount === 0) {
+      // Another concurrent request already consumed the balance — roll back the payout record
+      await AffiliatePayout.deleteOne({ _id: payout._id });
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
+    }
 
     res.status(201).json({ success: true, data: { payout } });
   } catch (err) {

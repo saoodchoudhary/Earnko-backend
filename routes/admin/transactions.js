@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const Transaction = require('../../models/Transaction');
+const User = require('../../models/User');
 
 let adminAuth, auth;
 try {
@@ -21,6 +22,10 @@ const ensureAdmin = (req, res, next) => {
 const adminMiddlewares = adminAuth ? [adminAuth] : (auth ? [auth, ensureAdmin] : [ensureAdmin]);
 
 const router = express.Router();
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Helper: parse date range from query
@@ -73,7 +78,7 @@ router.get('/', ...adminMiddlewares, async (req, res) => {
     const filter = {};
     if (status && status !== 'all') filter.status = status;
     if (q) {
-      filter.$or = [{ orderId: new RegExp(q, 'i') }];
+      filter.$or = [{ orderId: new RegExp(escapeRegex(q), 'i') }];
     }
     if (userId && mongoose.isValidObjectId(userId)) filter.user = userId;
     if (storeId && mongoose.isValidObjectId(storeId)) filter.store = storeId;
@@ -148,8 +153,46 @@ router.patch('/:id/status', ...adminMiddlewares, async (req, res) => {
     const tx = await Transaction.findById(req.params.id);
     if (!tx) return res.status(404).json({ success: false, message: 'Not found' });
 
+    const prevStatus = tx.status;
     tx.status = status;
     await tx.save();
+
+    // Apply wallet side-effects when status changes
+    const delta = Math.abs(Number(tx.commissionAmount || 0));
+    if (delta && tx.user && prevStatus !== status) {
+      if (prevStatus !== 'confirmed' && status === 'confirmed') {
+        // Move from pending → available
+        await User.updateOne(
+          { _id: tx.user },
+          {
+            $inc: {
+              'wallet.pendingCashback': -delta,
+              'wallet.confirmedCashback': delta,
+              'wallet.availableBalance': delta
+            }
+          }
+        );
+      } else if (status === 'cancelled') {
+        if (prevStatus === 'confirmed') {
+          // Reverse a previously confirmed transaction
+          await User.updateOne(
+            { _id: tx.user },
+            {
+              $inc: {
+                'wallet.confirmedCashback': -delta,
+                'wallet.availableBalance': -delta
+              }
+            }
+          );
+        } else if (prevStatus === 'pending') {
+          // Remove from pending
+          await User.updateOne(
+            { _id: tx.user },
+            { $inc: { 'wallet.pendingCashback': -delta } }
+          );
+        }
+      }
+    }
 
     res.json({ success: true, message: 'Status updated', data: { transaction: tx } });
   } catch (err) {

@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const passport = require('passport'); // NEW
 require('dotenv').config();
@@ -20,6 +21,7 @@ const app = express();
 const server = http.createServer(app);
 
 // CORS (match frontend)
+app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true

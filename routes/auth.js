@@ -2,16 +2,25 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
+const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 require('dotenv').config();
 
 const { auth } = require('../middleware/auth');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many attempts, please try again later' }
+});
 
 // Register (includes referral support via ?ref=<userId> or body.ref)
-router.post('/register', [
+router.post('/register', authLimiter, [
   body('name').notEmpty().withMessage('Name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 chars')
@@ -57,7 +66,7 @@ router.post('/register', [
 });
 
 // Login
-router.post('/login', [
+router.post('/login', authLimiter, [
   body('email').isEmail(),
   body('password').notEmpty()
 ], async (req, res) => {
