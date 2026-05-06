@@ -5,8 +5,14 @@ const path = require('path');
 const multer = require('multer');
 const { adminAuth } = require('../../middleware/auth');
 const HomepageBanner = require('../../models/HomepageBanner');
+const { toAbsoluteUrl } = require('../../utils/urlHelpers');
 
 const router = express.Router();
+
+function normalizeBanner(b) {
+  if (!b) return b;
+  return { ...b, imageUrl: toAbsoluteUrl(b.imageUrl) };
+}
 
 // Multer setup (same style as stores logo upload)
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
@@ -35,7 +41,7 @@ const upload = multer({
 router.get('/', adminAuth, async (_req, res) => {
   try {
     const items = await HomepageBanner.find({}).sort({ sortOrder: 1, updatedAt: -1 }).lean();
-    res.json({ success: true, data: { items } });
+    res.json({ success: true, data: { items: items.map(normalizeBanner) } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
@@ -59,7 +65,7 @@ router.post('/', adminAuth, async (req, res) => {
     };
 
     const created = await HomepageBanner.create(payload);
-    res.status(201).json({ success: true, data: { item: created } });
+    res.status(201).json({ success: true, data: { item: normalizeBanner(created.toObject()) } });
   } catch (err) {
     res.status(400).json({ success: false, message: 'Bad request', error: err.message });
   }
@@ -86,9 +92,9 @@ router.put('/:id', adminAuth, async (req, res) => {
     // remove undefined keys
     Object.keys(patch).forEach(k => patch[k] === undefined && delete patch[k]);
 
-    const updated = await HomepageBanner.findByIdAndUpdate(id, patch, { new: true });
+    const updated = await HomepageBanner.findByIdAndUpdate(id, patch, { new: true }).lean();
     if (!updated) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { item: updated } });
+    res.json({ success: true, data: { item: normalizeBanner(updated) } });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message || 'Bad request' });
   }
@@ -105,7 +111,7 @@ router.post('/:id/image', adminAuth, upload.single('image'), async (req, res) =>
     const updated = await HomepageBanner.findByIdAndUpdate(id, { imageUrl: publicPath }, { new: true }).lean();
     if (!updated) return res.status(404).json({ success: false, message: 'Not found' });
 
-    res.json({ success: true, data: { item: updated } });
+    res.json({ success: true, data: { item: normalizeBanner(updated) } });
   } catch (err) {
     console.error('Admin banner image upload error:', err);
     res.status(500).json({ success: false, message: err.message || 'Internal server error' });
