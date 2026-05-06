@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const Product = require('../models/Product');
+const { normalizeProduct } = require('../utils/urlHelpers');
 
 const router = express.Router();
 
@@ -24,7 +25,7 @@ router.get('/', async (req, res) => {
       Product.countDocuments(filter),
     ]);
 
-    res.json({ success: true, data: { items, total, currentPage: pageNum, totalPages: Math.ceil(total / limitNum) } });
+    res.json({ success: true, data: { items: items.map(normalizeProduct), total, currentPage: pageNum, totalPages: Math.ceil(total / limitNum) } });
   } catch (err) {
     console.error('public products error', err);
     res.status(500).json({ success: false, message: 'Server error' });

@@ -16,4 +16,24 @@ function toAbsoluteUrl(url) {
   return `${backendBase}${url}`;
 }
 
-module.exports = { toAbsoluteUrl };
+/**
+ * Normalize a store object so its logo is an absolute URL.
+ * @param {object|null|undefined} store
+ * @returns {object|null|undefined}
+ */
+function normalizeStore(store) {
+  if (!store) return store;
+  return { ...store, logo: toAbsoluteUrl(store.logo) };
+}
+
+/**
+ * Normalize a product object so its images array contains absolute URLs.
+ * @param {object|null|undefined} product
+ * @returns {object|null|undefined}
+ */
+function normalizeProduct(product) {
+  if (!product) return product;
+  return { ...product, images: (product.images || []).map(toAbsoluteUrl) };
+}
+
+module.exports = { toAbsoluteUrl, normalizeStore, normalizeProduct };

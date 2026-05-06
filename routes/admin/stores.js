@@ -7,14 +7,9 @@ const { adminAuth } = require('../../middleware/auth');
 const Store = require('../../models/Store');
 const Transaction = require('../../models/Transaction');
 const Click = require('../../models/Click');
-const { toAbsoluteUrl } = require('../../utils/urlHelpers');
+const { normalizeStore } = require('../../utils/urlHelpers');
 
 const router = express.Router();
-
-function normalizeStore(store) {
-  if (!store) return store;
-  return { ...store, logo: toAbsoluteUrl(store.logo) };
-}
 
 // Multer setup for logo uploads
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
@@ -104,9 +99,9 @@ router.post('/', adminAuth, async (req, res) => {
 router.patch('/:id', adminAuth, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
-    const item = await Store.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const item = await Store.findByIdAndUpdate(req.params.id, req.body, { new: true }).lean();
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { item } });
+    res.json({ success: true, data: { item: normalizeStore(item) } });
   } catch (err) {
     console.error('Admin update store error:', err);
     res.status(400).json({ success: false, message: err.message || 'Bad request' });

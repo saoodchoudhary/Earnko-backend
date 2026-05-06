@@ -2,14 +2,9 @@ const express = require('express');
 const { auth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const Store = require('../models/Store');
-const { toAbsoluteUrl } = require('../utils/urlHelpers');
+const { normalizeStore } = require('../utils/urlHelpers');
 
 const router = express.Router();
-
-function normalizeStore(store) {
-  if (!store) return store;
-  return { ...store, logo: toAbsoluteUrl(store.logo) };
-}
 
 // Public list
 router.get('/', async (_req, res) => {
@@ -50,7 +45,7 @@ router.put('/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const store = await Store.findByIdAndUpdate(req.params.id, req.body, { new: true }).lean();
     if (!store) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { store } });
+    res.json({ success: true, data: { store: normalizeStore(store) } });
   } catch (err) {
     console.error('Update store error:', err);
     res.status(400).json({ success: false, message: 'Bad request', error: err.message });
