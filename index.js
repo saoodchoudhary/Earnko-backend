@@ -32,8 +32,12 @@ app.use(cookieParser());
 app.use(passport.initialize());
 
 // Serve uploaded files (store logos, etc.)
+// Override Cross-Origin-Resource-Policy so the frontend (different origin) can load images
 const uploadsDir = path.join(__dirname, 'uploads');
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', (_req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(uploadsDir));
 
 app.use('/api/integrations', require('./routes/integrations.telegram'));
 // Routes

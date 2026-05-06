@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const { adminAuth } = require('../../middleware/auth');
 const Product = require('../../models/Product');
+const { normalizeProduct } = require('../../utils/urlHelpers');
 
 const router = express.Router();
 
@@ -25,7 +26,7 @@ router.get('/', adminAuth, async (req, res) => {
       Product.countDocuments(filter),
     ]);
 
-    res.json({ success: true, data: { items, total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum } });
+    res.json({ success: true, data: { items: items.map(normalizeProduct), total, totalPages: Math.ceil(total / limitNum), currentPage: pageNum } });
   } catch (err) {
     console.error('admin products list error', err);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -38,8 +39,8 @@ router.get('/', adminAuth, async (req, res) => {
 router.post('/', adminAuth, async (req, res) => {
   try {
     const item = await Product.create(req.body);
-    const populated = await Product.findById(item._id).populate('store', 'name');
-    res.status(201).json({ success: true, data: { item: populated } });
+    const populated = await Product.findById(item._id).populate('store', 'name').lean();
+    res.status(201).json({ success: true, data: { item: normalizeProduct(populated) } });
   } catch (err) {
     console.error('admin create product error', err);
     res.status(400).json({ success: false, message: err.message || 'Bad request' });
@@ -54,7 +55,7 @@ router.get('/:id', adminAuth, async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
     const item = await Product.findById(req.params.id).populate('store', 'name').lean();
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { item } });
+    res.json({ success: true, data: { item: normalizeProduct(item) } });
   } catch (err) {
     console.error('admin get product error', err);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -67,9 +68,9 @@ router.get('/:id', adminAuth, async (req, res) => {
 router.patch('/:id', adminAuth, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid id' });
-    const item = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate('store', 'name');
+    const item = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate('store', 'name').lean();
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { item } });
+    res.json({ success: true, data: { item: normalizeProduct(item) } });
   } catch (err) {
     console.error('admin update product error', err);
     res.status(400).json({ success: false, message: err.message || 'Bad request' });
