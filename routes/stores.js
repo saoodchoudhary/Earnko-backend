@@ -2,14 +2,20 @@ const express = require('express');
 const { auth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const Store = require('../models/Store');
+const { toAbsoluteUrl } = require('../utils/urlHelpers');
 
 const router = express.Router();
+
+function normalizeStore(store) {
+  if (!store) return store;
+  return { ...store, logo: toAbsoluteUrl(store.logo) };
+}
 
 // Public list
 router.get('/', async (_req, res) => {
   try {
     const stores = await Store.find({ isActive: true }).sort({ name: 1 }).lean();
-    res.json({ success: true, data: { stores } });
+    res.json({ success: true, data: { stores: stores.map(normalizeStore) } });
   } catch (err) {
     console.error('List stores error:', err);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -21,7 +27,7 @@ router.get('/:id', async (req, res) => {
   try {
     const store = await Store.findById(req.params.id).lean();
     if (!store) return res.status(404).json({ success: false, message: 'Not found' });
-    res.json({ success: true, data: { store } });
+    res.json({ success: true, data: { store: normalizeStore(store) } });
   } catch (err) {
     console.error('Get store error:', err);
     res.status(500).json({ success: false, message: 'Server error' });

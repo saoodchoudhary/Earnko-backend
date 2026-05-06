@@ -1,5 +1,6 @@
 const express = require('express');
 const HomepageBanner = require('../../models/HomepageBanner');
+const { toAbsoluteUrl } = require('../../utils/urlHelpers');
 
 const router = express.Router();
 
@@ -25,7 +26,7 @@ router.get('/', async (_req, res) => {
         _id: r._id,
         title: r.title,
         subtitle: r.subtitle,
-        imageUrl: r.imageUrl,
+        imageUrl: toAbsoluteUrl(r.imageUrl),
         linkUrl: r.linkUrl,
         buttonText: r.buttonText,
         platform: r.platform,
