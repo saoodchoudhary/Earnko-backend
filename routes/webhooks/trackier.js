@@ -4,7 +4,6 @@ const WebhookEvent = require('../../models/WebhookEvent');
 const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
-const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
 
@@ -83,7 +82,7 @@ function normalizePayload(req) {
  * Recommended Trackier postback URL:
  *   https://YOUR_DOMAIN.com/api/webhooks/trackier?click_id={click_id}&txn_id={txn_id}&sale_amount={sale_amount}&payout={payout}&currency={currency}&conversion_status={conversion_status}&campaign_id={campaign_id}&p1={p1}
  */
-router.all('/', makeWebhookAuth('TRACKIER_WEBHOOK_SECRET'), async (req, res) => {
+router.all('/', async (req, res) => {
   const { payload, clickId, txnId, saleAmount, payout, currency, status, campaignId, p1 } = normalizePayload(req);
 
   const event = await WebhookEvent.create({

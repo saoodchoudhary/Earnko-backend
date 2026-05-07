@@ -5,7 +5,6 @@ const User = require('../../models/User');
 const Click = require('../../models/Click');
 const WebhookEvent = require('../../models/WebhookEvent');
 const { creditOnApprovedTransaction, reverseOnRejection } = require('../../services/referralService');
-const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
 
@@ -15,7 +14,7 @@ const MAX_COMMISSION = 50000; // ₹50,000 sanity cap
  * Cuelinks Postback/Webhook
  * Keys: subid, order_id, sale_amount, commission, status
  */
-router.all('/', makeWebhookAuth('CUELINKS_WEBHOOK_SECRET'), async (req, res) => {
+router.all('/', async (req, res) => {
     const payload = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
 
     const event = await WebhookEvent.create({

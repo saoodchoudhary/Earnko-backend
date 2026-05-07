@@ -4,7 +4,6 @@ const WebhookEvent = require('../../models/WebhookEvent');
 const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
-const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
 
@@ -82,7 +81,7 @@ function normalizePayload(req) {
  *  - commission
  *  - status (approved/cancelled/pending)
  */
-router.all('/', makeWebhookAuth('EXTRAPE_WEBHOOK_SECRET'), async (req, res) => {
+router.all('/', async (req, res) => {
   const { payload, subid, orderId, saleAmount, commission, status, currency } = normalizePayload(req);
 
   const event = await WebhookEvent.create({
