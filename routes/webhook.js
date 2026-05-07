@@ -29,8 +29,10 @@ const webhookRateLimit = rateLimit({
  * Generic conversion webhook
  * Accepts: userId, orderId, amount, commission, storeId?, productId?, clickId?
  * If productId present, prefer product.store as storeId, and store productId/categoryKey in trackingData.
+ * No shared-secret header is required for this endpoint.
  *
  * Security controls:
+ *  - rate limited via webhookRateLimit
  *  - commission capped at MAX_COMMISSION; negative values rejected
  *  - userId must reference an existing, non-blocked user
  *  - clickId (required) must exist in the Click collection and belong to that userId
