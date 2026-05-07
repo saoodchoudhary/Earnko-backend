@@ -4,7 +4,6 @@ const WebhookEvent = require('../../models/WebhookEvent');
 const Transaction = require('../../models/Transaction');
 const User = require('../../models/User');
 const Click = require('../../models/Click');
-const { makeWebhookAuth } = require('../../middleware/webhookAuth');
 
 const router = express.Router();
 
@@ -91,7 +90,7 @@ async function findClickBySlug(slug) {
   return { click: null, matchedBy: 'userSlugButNoClick' };
 }
 
-router.all('/', makeWebhookAuth('REALCASH_WEBHOOK_SECRET'), async (req, res) => {
+router.all('/', async (req, res) => {
   const { payload, clickIdCandidates, slugCandidate, orderId, saleAmount, commission, status, currency } =
     normalizePayload(req);
 
