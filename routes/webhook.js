@@ -1,5 +1,4 @@
 const express = require('express');
-const crypto = require('crypto');
 const mongoose = require('mongoose');
 const rateLimit = require('express-rate-limit');
 const Transaction = require('../models/Transaction');
@@ -18,37 +17,6 @@ function parseStrictNumber(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Middleware: verify shared webhook secret using constant-time comparison.
- * Callers must supply the secret via HTTP header: X-Webhook-Secret: <secret>
- * Set WEBHOOK_SECRET in your environment variables.
- */
-function requireWebhookSecret(req, res, next) {
-  const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) {
-    // If no secret is configured, block all requests to prevent accidental exposure.
-    console.error('[webhook] WEBHOOK_SECRET env variable is not set – refusing request');
-    return res.status(503).json({ success: false, message: 'Webhook not configured' });
-  }
-  const provided = req.headers['x-webhook-secret'];
-  if (!provided) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
-  }
-  // Constant-time comparison to prevent timing attacks
-  let valid = false;
-  try {
-    valid =
-      provided.length === secret.length &&
-      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(secret));
-  } catch (_) {
-    valid = false;
-  }
-  if (!valid) {
-    return res.status(401).json({ success: false, message: 'Unauthorized' });
-  }
-  next();
-}
-
 const webhookRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 60,
@@ -61,15 +29,13 @@ const webhookRateLimit = rateLimit({
  * Generic conversion webhook
  * Accepts: userId, orderId, amount, commission, storeId?, productId?, clickId?
  * If productId present, prefer product.store as storeId, and store productId/categoryKey in trackingData.
- * Requires header: X-Webhook-Secret: <WEBHOOK_SECRET>
  *
  * Security controls:
- *  - Secret header required (503 if not configured, 401 if wrong/missing)
  *  - commission capped at MAX_COMMISSION; negative values rejected
  *  - userId must reference an existing, non-blocked user
  *  - clickId (required) must exist in the Click collection and belong to that userId
  */
-router.post('/conversion', webhookRateLimit, requireWebhookSecret, async (req, res) => {
+router.post('/conversion', webhookRateLimit, async (req, res) => {
   const event = await WebhookEvent.create({
     source: req.query.source || 'generic',
     eventType: 'conversion',
